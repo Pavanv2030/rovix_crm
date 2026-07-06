@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="380" height="380" viewBox="0 0 380 380">
+  <g fill="none" stroke="#0b141a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.05">
+    <!-- chat bubble -->
+    <path d="M30 40h44a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H50l-12 10v-10h-8a8 8 0 0 1-8-8V48a8 8 0 0 1 8-8z"/>
+    <!-- heart -->
+    <path d="M300 46c-6-10-22-8-22 5 0 9 12 16 22 24 10-8 22-15 22-24 0-13-16-15-22-5z"/>
+    <!-- smiley -->
+    <circle cx="180" cy="70" r="20"/>
+    <circle cx="173" cy="65" r="1.6" fill="#0b141a"/>
+    <circle cx="187" cy="65" r="1.6" fill="#0b141a"/>
+    <path d="M171 76c4 5 14 5 18 0"/>
+    <!-- camera -->
+    <rect x="110" y="150" width="46" height="32" rx="5"/>
+    <circle cx="133" cy="166" r="9"/>
+    <path d="M120 150l5-7h16l5 7"/>
+    <!-- phone -->
+    <rect x="250" y="140" width="26" height="46" rx="5"/>
+    <line x1="258" y1="147" x2="268" y2="147"/>
+    <!-- star -->
+    <path d="M60 210l6 13 14 2-10 10 3 14-13-7-13 7 3-14-10-10 14-2z"/>
+    <!-- music note -->
+    <path d="M320 200v34a9 9 0 1 1-6-8V206l18-4v28a9 9 0 1 1-6-8v-26z"/>
+    <!-- check bubble -->
+    <path d="M150 270h56a8 8 0 0 1 8 8v20a8 8 0 0 1-8 8h-26l-12 9v-9h-18a8 8 0 0 1-8-8v-20a8 8 0 0 1 8-8z"/>
+    <path d="M165 288l6 6 12-13"/>
+    <!-- coffee -->
+    <path d="M40 300h34v16a12 12 0 0 1-12 12H52a12 12 0 0 1-12-12z"/>
+    <path d="M74 305h8a7 7 0 0 1 0 14h-8"/>
+    <path d="M50 292c0-4 4-4 4-8M60 292c0-4 4-4 4-8"/>
+    <!-- gift -->
+    <rect x="280" y="290" width="40" height="34" rx="3"/>
+    <line x1="300" y1="290" x2="300" y2="324"/>
+    <line x1="280" y1="302" x2="320" y2="302"/>
+    <path d="M300 290c-6-10-18-4-10 4M300 290c6-10 18-4 10 4"/>
+    <!-- airplane -->
+    <path d="M210 150l40 14-40 14 8-14z"/>
+  </g>
+</svg>

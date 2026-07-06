@@ -1,0 +1,556 @@
+/* ============================================================
+   Rovix UI — WATI-style SaaS dashboard skin
+   Pure CSS overlay. No JS/PHP dependencies.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --primary:        #25D366;
+    --primary-dark:   #128C7E;
+    --primary-hover:  #16A34A;
+    --sidebar-bg:     #FFFFFF;
+    --body-bg:        #F7F8FA;
+    --card-bg:        #FFFFFF;
+    --text-primary:   #111827;
+    --text-secondary: #6B7280;
+    --text-muted:     #9CA3AF;
+    --border:         #E5E7EB;
+    --accent:         #25D366;
+    --radius:         8px;
+    --card-shadow:    0 1px 3px rgba(0, 0, 0, 0.06);
+    --transition:     all 0.15s ease;
+}
+
+/* ---------- Base ---------- */
+
+html {
+    font-size: 14px;
+}
+
+body {
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+    background-color: var(--body-bg) !important;
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+* {
+    transition-timing-function: ease;
+}
+
+/* Thin, unobtrusive scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ---------- Body background remap ---------- */
+
+.bg-gray-50 { background-color: var(--body-bg) !important; }
+
+/* ---------- Sidebar (WATI style: white, green accent) ---------- */
+
+aside.rx-sidebar {
+    width: 220px !important;
+    background: var(--sidebar-bg) !important;
+    border-right: 1px solid var(--border);
+    color: var(--text-primary) !important;
+}
+
+.rx-sidebar .rx-logo {
+    height: 64px;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+}
+
+.rx-sidebar .rx-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    border-radius: 0;
+    border-left: 3px solid transparent;
+    transition: var(--transition);
+}
+
+.rx-sidebar .rx-nav-item:hover {
+    background: #F9FAFB;
+    color: var(--text-primary);
+}
+
+.rx-sidebar .rx-nav-item.rx-active {
+    background: #F0FDF4;
+    color: #16A34A;
+    border-left-color: var(--primary);
+}
+
+.rx-sidebar .rx-nav-item svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+.rx-sidebar .rx-section-label {
+    padding: 12px 16px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.rx-sidebar .rx-badge-beta {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background: #F0FDF4;
+    color: #16A34A;
+    line-height: 1.4;
+}
+
+.rx-sidebar .rx-user-footer {
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+}
+
+/* ---------- Topbar ---------- */
+
+header.rx-topbar {
+    height: 56px;
+    background: #FFFFFF;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+}
+
+.rx-topbar h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.rx-topbar .rx-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 9999px;
+    background: var(--primary-dark);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ---------- Cards ---------- */
+
+.bg-white.rounded-xl,
+.bg-white.rounded-2xl,
+.bg-white.rounded-lg {
+    background: var(--card-bg);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+}
+
+.border-gray-200 { border-color: var(--border) !important; }
+.border-gray-100 { border-color: #F3F4F6 !important; }
+
+/* KPI metric numbers */
+.text-2xl.font-bold, .text-3xl.font-bold {
+    font-size: 28px !important;
+    font-weight: 700 !important;
+    color: var(--text-primary);
+}
+
+/* ---------- Tables ---------- */
+
+table {
+    border-collapse: collapse;
+}
+
+thead th {
+    font-size: 12px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600 !important;
+}
+
+/* Remap colored table headers (teal, blue, etc.) to neutral WATI header */
+thead tr.bg-teal-600,
+thead tr.bg-blue-600,
+thead tr.bg-blue-900,
+thead tr[class*='bg-teal'],
+thead tr[class*='bg-blue-9'] {
+    background: #F9FAFB !important;
+    color: var(--text-secondary) !important;
+}
+
+thead tr.bg-teal-600 th,
+thead tr.bg-blue-600 th,
+thead tr.bg-blue-900 th,
+thead tr[class*='bg-teal'] th {
+    color: var(--text-secondary) !important;
+}
+
+thead.bg-gray-50 { background: #F9FAFB !important; }
+thead.bg-gray-50 th { color: var(--text-secondary) !important; }
+
+tbody tr {
+    height: 52px;
+    transition: var(--transition);
+}
+
+tbody tr:hover { background: #F9FAFB; }
+
+/* ---------- Buttons ---------- */
+
+/* Primary remap: legacy blue → WhatsApp green */
+.bg-blue-600, .bg-blue-700, .bg-blue-900,
+button.bg-blue-600, a.bg-blue-600,
+button.bg-blue-900, a.bg-blue-900 {
+    background-color: var(--primary) !important;
+    color: #fff !important;
+}
+
+.hover\:bg-blue-700:hover,
+.hover\:bg-blue-800:hover,
+.hover\:bg-blue-500:hover {
+    background-color: var(--primary-hover) !important;
+}
+
+.bg-sky-600, .bg-emerald-600, .bg-green-600 {
+    background-color: var(--primary) !important;
+}
+
+.hover\:bg-sky-700:hover,
+.hover\:bg-emerald-700:hover,
+.hover\:bg-green-700:hover {
+    background-color: var(--primary-hover) !important;
+}
+
+button, .rounded-lg, .rounded-md {
+    border-radius: var(--radius);
+}
+
+button {
+    font-weight: 500;
+    transition: var(--transition);
+}
+
+/* Text links: blue → green accents */
+.text-blue-600 { color: var(--primary-dark) !important; }
+.hover\:text-blue-600:hover { color: var(--primary-dark) !important; }
+.text-blue-700 { color: var(--primary-dark) !important; }
+.border-blue-700 { border-color: var(--primary) !important; }
+.hover\:underline:hover { text-decoration-color: var(--primary-dark); }
+
+/* Focus rings for interactive elements */
+button:focus-visible,
+a:focus-visible {
+    outline: 2px solid rgba(37, 211, 102, 0.4);
+    outline-offset: 1px;
+}
+
+/* ---------- Forms ---------- */
+
+input[type='text'],
+input[type='email'],
+input[type='password'],
+input[type='number'],
+input[type='search'],
+input[type='url'],
+input[type='tel'],
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
+select,
+textarea {
+    border: 1px solid #D1D5DB;
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    color: var(--text-primary);
+    transition: var(--transition);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.15) !important;
+    --tw-ring-color: rgba(37, 211, 102, 0.15) !important;
+    --tw-ring-shadow: 0 0 0 3px rgba(37, 211, 102, 0.15) !important;
+}
+
+/* WhatsApp-style borderless inputs (sidebar search, composer) — no ring/border on focus */
+.wa-flat-input,
+.wa-flat-input:focus {
+    border: none !important;
+    box-shadow: none !important;
+    --tw-ring-color: transparent !important;
+    --tw-ring-shadow: none !important;
+}
+
+/* input[type='text'] above sets a padding shorthand that outranks a bare
+   Tailwind pl-* utility on specificity — icon-inside search input needs
+   this to actually clear the icon instead of text sitting under it. */
+.wa-flat-input.pl-11 {
+    padding-left: 2.75rem !important;
+}
+
+label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #374151;
+}
+
+::placeholder { color: var(--text-muted); }
+
+/* ---------- Badges / status pills ---------- */
+
+.rounded-full[class*='bg-'][class*='text-'] {
+    border-radius: 9999px;
+    font-size: 11px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+/* Status color harmonization */
+.bg-green-100 { background: #DCFCE7 !important; }
+.text-green-700, .text-green-600 { color: #16A34A !important; }
+.bg-amber-100, .bg-yellow-100 { background: #FEF3C7 !important; }
+.text-amber-700, .text-yellow-700 { color: #92400E !important; }
+
+/* ============================================================
+   Inbox — authentic WhatsApp Web look
+   ============================================================ */
+
+/* Chat wallpaper: WhatsApp beige + subtle doodle pattern */
+#message-thread,
+.rx-chat-window,
+#chat-window {
+    background-color: #efeae2 !important;
+    background-image: url('../img/wa-bg.svg');
+    background-repeat: repeat;
+    background-size: 380px auto;
+}
+
+/* Active conversation row in list */
+.bg-blue-50 { background: #f0f2f5 !important; }
+.border-blue-900 { border-color: var(--primary) !important; }
+
+/* ---------- Message bubbles ---------- */
+
+/* Row wrappers keep flex alignment from markup.
+   Bubble = the .wa-bubble element (replaces old bg-white/bg-blue-900 boxes). */
+.wa-bubble {
+    position: relative;
+    max-width: 65%;
+    padding: 6px 9px 8px 9px;
+    border-radius: 7.5px;
+    box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+    font-size: 14px;
+    line-height: 19px;
+    color: #111b21;
+    word-wrap: break-word;
+}
+
+/* Incoming — white, tail top-left */
+.wa-bubble.wa-in {
+    background: #ffffff;
+    border-top-left-radius: 0;
+    margin-left: 8px;
+}
+.wa-bubble.wa-in::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -8px;
+    width: 8px;
+    height: 13px;
+    background: #ffffff;
+    clip-path: polygon(100% 0, 100% 100%, 0 0);
+}
+
+/* Outgoing — WhatsApp green, tail top-right */
+.wa-bubble.wa-out {
+    background: #d9fdd3;
+    border-top-right-radius: 0;
+    margin-right: 8px;
+}
+.wa-bubble.wa-out::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -8px;
+    width: 8px;
+    height: 13px;
+    background: #d9fdd3;
+    clip-path: polygon(0 0, 0 100%, 100% 0);
+}
+
+/* Message text inside bubbles: always dark (WhatsApp uses dark on both) */
+.wa-bubble p,
+.wa-bubble .text-sm,
+.wa-bubble .text-gray-800,
+.wa-bubble .text-white { color: #111b21 !important; }
+
+.wa-bubble a { color: #027eb5 !important; text-decoration: none; }
+.wa-bubble a:hover { text-decoration: underline; }
+
+/* Meta row (time + ticks) — sits at bottom-right INSIDE the bubble */
+.wa-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    float: right;
+    margin: 4px 0 -2px 8px;
+    font-size: 11px;
+    line-height: 15px;
+    color: #667781;
+    user-select: none;
+}
+.wa-meta svg { width: 15px; height: 15px; }
+
+/* Ticks: gray by default, blue when read */
+.wa-tick { color: #8696a0 !important; }
+.wa-tick-read { color: #53bdeb !important; }
+.wa-tick-fail { color: #ef4444 !important; }
+
+/* Reaction badge — little emoji pill overlapping the bubble's bottom corner */
+.wa-reaction-badge {
+    position: absolute;
+    bottom: -9px;
+    right: 6px;
+    background: #ffffff;
+    border-radius: 999px;
+    box-shadow: 0 1px 2px rgba(11, 20, 26, 0.25);
+    padding: 1px 5px;
+    font-size: 12px;
+    line-height: 16px;
+    z-index: 1;
+}
+
+/* Hover-to-react trigger — small circular smiley button outside the bubble */
+.wa-react-trigger {
+    position: absolute;
+    top: 2px;
+    right: -34px;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #54656f;
+    box-shadow: 0 1px 2px rgba(11, 20, 26, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
+}
+.wa-bubble.wa-in .wa-react-trigger { right: -34px; }
+.wa-bubble.wa-out .wa-react-trigger { left: -34px; right: auto; }
+.wa-react-picker {
+    position: absolute;
+    top: -42px;
+    right: -10px;
+    background: #ffffff;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(11, 20, 26, 0.3);
+    padding: 4px 8px;
+    display: flex;
+    gap: 4px;
+    z-index: 3;
+    white-space: nowrap;
+}
+.wa-react-picker span { cursor: pointer; font-size: 18px; transition: transform 0.1s; }
+.wa-react-picker span:hover { transform: scale(1.3); }
+
+/* Quoted-reply preview — sits above the message content, inside the bubble */
+.wa-quote {
+    background: rgba(11, 20, 26, 0.05);
+    border-left: 3px solid #06cf9c;
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+}
+.wa-bubble.wa-out .wa-quote { border-left-color: #027eb5; }
+.wa-quote-sender { font-size: 12.5px; font-weight: 600; color: #06cf9c; }
+.wa-bubble.wa-out .wa-quote-sender { color: #027eb5; }
+.wa-quote-text {
+    font-size: 12.5px;
+    color: #667781;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* System / date separators */
+.wa-system {
+    background: #ffffff;
+    color: #54656f;
+    font-size: 12.5px;
+    padding: 5px 12px;
+    border-radius: 7.5px;
+    box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+.wa-date-pill {
+    background: #ffffff;
+    color: #54656f;
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 7.5px;
+    box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+
+/* Composer bar */
+.wa-composer { background: #f0f2f5 !important; }
+
+/* Top progress bar shown during pjax-style navigation (app-nav.js) */
+#rx-nav-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 3px;
+    width: 0%;
+    background: var(--primary, #25D366);
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Conversation list unread badge already green; keep list clean */
+#message-thread { padding: 12px 6% !important; }
+
+/* ---------- Modals ---------- */
+
+.rounded-2xl { border-radius: 12px !important; }
+
+/* ---------- Misc polish ---------- */
+
+hr { border-color: var(--border); }
+
+.shadow, .shadow-sm, .shadow-md { box-shadow: var(--card-shadow) !important; }
+
+a, button, input, select, textarea, tr {
+    transition: var(--transition);
+}
