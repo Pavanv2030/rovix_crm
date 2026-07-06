@@ -1,0 +1,12 @@
+{
+  "name": "rovix-crm",
+  "version": "1.0.0",
+  "description": "RovixAI WhatsApp CRM",
+  "scripts": {
+    "dev": "tailwindcss -i ./src/input.css -o ./public/css/tailwind.css --watch",
+    "build": "tailwindcss -i ./src/input.css -o ./public/css/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}
