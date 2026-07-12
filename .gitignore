@@ -46,3 +46,6 @@ public/test_db.php
 
 # Audit docs with secret fragments — keep local, don't push public
 SECURITY-AUDIT.md
+
+# Local-only dev clutter: QA screenshots/logs, planning docs, ad-hoc scripts
+_local/
