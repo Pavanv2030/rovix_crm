@@ -144,6 +144,10 @@ $roleColors = [
                 </div>
             </div>
             <div class="flex items-center gap-2">
+                <button onclick="copyInviteLink('<?= esc($inv['id']) ?>')"
+                        class="px-3 py-1.5 text-xs border border-blue-200 rounded-lg hover:bg-blue-50 text-blue-600 font-medium">
+                    Copy Link
+                </button>
                 <button onclick="resendInvitation('<?= esc($inv['id']) ?>')"
                         class="px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-700">
                     Resend
@@ -203,6 +207,10 @@ $roleColors = [
 
 <script>
 const TEAM_BASE = <?= json_encode(base_url('team'), JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const CSRF_HEADERS = {
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-CSRF-TOKEN': '<?= csrf_hash() ?>',
+};
 
 // Modal
 function showInviteModal() {
@@ -225,14 +233,27 @@ async function submitInvite(e) {
     const form = document.getElementById('invite-form');
     const fd   = new FormData(form);
 
+    fd.append('<?= csrf_token() ?>', '<?= csrf_hash() ?>');
+
     try {
-        const res  = await fetch(TEAM_BASE + '/invite', { method: 'POST', body: fd });
+        const res  = await fetch(TEAM_BASE + '/invite', {
+            method: 'POST',
+            headers: CSRF_HEADERS,
+            body: fd,
+        });
         const data = await res.json();
         if (data.success) {
             hideInviteModal();
+            if (data.invite_link) {
+                await navigator.clipboard.writeText(data.invite_link).catch(() => {});
+            }
             location.reload();
         } else {
-            errEl.textContent = data.error || 'Failed to send invitation.';
+            if (data.errors) {
+                errEl.textContent = Object.values(data.errors).join(' ');
+            } else {
+                errEl.textContent = data.error || data.message || 'Failed to send invitation.';
+            }
             errEl.classList.remove('hidden');
         }
     } catch {
@@ -246,7 +267,7 @@ async function submitInvite(e) {
 async function updateRole(profileId, role) {
     const res = await fetch(`${TEAM_BASE}/${profileId}/update-role`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...CSRF_HEADERS },
         body: `role=${role}`,
     });
     const data = await res.json();
@@ -256,7 +277,8 @@ async function updateRole(profileId, role) {
 async function toggleActive(profileId, currentlyActive) {
     if (!confirm(currentlyActive ? 'Deactivate this member? They will not be able to log in.' : 'Reactivate this member?')) return;
     const res = await fetch(`${TEAM_BASE}/${profileId}/toggle-active`, {
-        method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        method: 'POST',
+        headers: CSRF_HEADERS,
     });
     const data = await res.json();
     if (data.success) { location.reload(); }
@@ -266,7 +288,8 @@ async function toggleActive(profileId, currentlyActive) {
 async function removeMember(profileId, name) {
     if (!confirm(`Remove ${name} from the team? This cannot be undone.`)) return;
     const res = await fetch(`${TEAM_BASE}/${profileId}/remove`, {
-        method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        method: 'POST',
+        headers: CSRF_HEADERS,
     });
     const data = await res.json();
     if (data.success) {
@@ -278,16 +301,44 @@ async function removeMember(profileId, name) {
 
 async function resendInvitation(inviteId) {
     const res = await fetch(`${TEAM_BASE}/invitations/${inviteId}/resend`, {
-        method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        method: 'POST',
+        headers: CSRF_HEADERS,
     });
-    if (res.ok) { alert('Invitation resent! Expiry extended by 7 days.'); }
-    else { alert('Failed to resend'); }
+    if (res.ok) {
+        location.reload();
+    } else {
+        alert('Failed to resend');
+    }
+}
+
+async function copyInviteLink(inviteId) {
+    const res = await fetch(`${TEAM_BASE}/invitations/${inviteId}/link`, {
+        method: 'POST',
+        headers: CSRF_HEADERS,
+    });
+    const data = await res.json();
+    if (!data.success || !data.link) {
+        alert(data.error || 'Failed to generate invitation link');
+        return;
+    }
+    navigator.clipboard.writeText(data.link).then(() => {
+        alert('Invitation link copied to clipboard!');
+    }).catch(() => {
+        const el = document.createElement('textarea');
+        el.value = data.link;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        alert('Invitation link copied to clipboard!');
+    });
 }
 
 async function cancelInvitation(inviteId) {
     if (!confirm('Cancel this invitation? The link will stop working.')) return;
     const res = await fetch(`${TEAM_BASE}/invitations/${inviteId}/cancel`, {
-        method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        method: 'POST',
+        headers: CSRF_HEADERS,
     });
     if (res.ok) { document.getElementById('invite-row-' + inviteId)?.remove(); }
     else { alert('Failed to cancel'); }

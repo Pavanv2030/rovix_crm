@@ -108,7 +108,7 @@ class AutomationEngine
             $context  = ['contact' => &$contact, 'trigger' => $triggerData];
 
             $startKey = $fromStepId ?? '__root__';
-            $this->runChain($byParent, $startKey, $context, $executed, $automation);
+            $this->runChain($byParent, $startKey, $context, $executed, $automation, 0);
 
             $this->logModel->update($logId, [
                 'steps_executed' => json_encode($executed),
@@ -131,8 +131,13 @@ class AutomationEngine
 
     // ─── Private: chain traversal ───────────────────────────────────────────
 
-    private function runChain(array $byParent, string $parentKey, array &$context, array &$executed, array $automation): bool
+    private function runChain(array $byParent, string $parentKey, array &$context, array &$executed, array $automation, int $depth = 0): bool
     {
+        if ($depth > 50) {
+            log_message('error', "[AutomationEngine] Max depth exceeded (possible circular reference) in automation {$automation['id']}");
+            return false;
+        }
+
         if (empty($byParent[$parentKey])) return true;
 
         $steps = $byParent[$parentKey];
@@ -161,7 +166,7 @@ class AutomationEngine
             }
 
             // Recurse into children of this step
-            $continued = $this->runChain($byParent, $step['id'], $context, $executed, $automation);
+            $continued = $this->runChain($byParent, $step['id'], $context, $executed, $automation, $depth + 1);
             if (!$continued) return false;
         }
 
@@ -577,9 +582,15 @@ class AutomationEngine
 
     private function interpolate(string $text, array $contact): string
     {
+        // Cap interpolated values to prevent DoS via massive contact field values
+        $name    = mb_strimwidth($contact['name']    ?? '', 0, 500, '...');
+        $phone   = mb_strimwidth($contact['phone']   ?? '', 0, 100, '');
+        $email   = mb_strimwidth($contact['email']   ?? '', 0, 200, '...');
+        $company = mb_strimwidth($contact['company'] ?? '', 0, 200, '...');
+
         return str_replace(
             ['{{name}}', '{{phone}}', '{{email}}', '{{company}}'],
-            [$contact['name'] ?? '', $contact['phone'] ?? '', $contact['email'] ?? '', $contact['company'] ?? ''],
+            [$name, $phone, $email, $company],
             $text
         );
     }

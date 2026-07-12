@@ -80,43 +80,45 @@ class TeamController extends BaseController
             'account_id'         => session('account_id'),
             'email'              => $email,
             'role'               => $role,
-            'token_hash'         => $token,
+            'token_hash'         => $this->hashInviteToken($token),
             'invited_by_user_id' => session('user_id'),
             'expires_at'         => date('Y-m-d H:i:s', strtotime('+7 days')),
             'created_at'         => date('Y-m-d H:i:s'),
         ]);
 
-        $this->sendInviteEmail($email, $token, $role);
+        $emailSent = $this->sendInviteEmail($email, $token, $role);
 
         ActivityLogModel::record('team.invite_sent', 'invitation', $inviteId, [
             'email' => $email, 'role' => $role,
         ]);
 
-        return $this->response->setJSON(['success' => true]);
+        if ($emailSent) {
+            session()->setFlashdata('success', "Invitation sent to {$email}.");
+        } else {
+            session()->setFlashdata('error', "Invitation created for {$email}, but the email could not be sent. You can copy the invitation link below to share it manually.");
+        }
+
+        return $this->response->setJSON([
+            'success'     => true,
+            'invite_link' => base_url('team/accept/' . $token),
+        ]);
     }
 
     public function accept(string $token)
     {
-        AccountInvitationModel::setBypassAccountScope(true);
-        $inviteModel = new AccountInvitationModel();
-        $invite = $inviteModel->where('token_hash', $token)->first();
-        AccountInvitationModel::setBypassAccountScope(false);
+        $invite = $this->findInvitationByToken($token);
 
         if (!$invite)                                               return redirect()->to(base_url('login'))->with('error', 'Invalid invitation link.');
         if ($invite['accepted_at'])                                 return redirect()->to(base_url('login'))->with('error', 'This invitation has already been accepted.');
         if (strtotime($invite['expires_at']) < time())             return redirect()->to(base_url('login'))->with('error', 'This invitation has expired.');
 
-        return view('team/accept', ['invitation' => $invite]);
+        return view('team/accept', ['invitation' => $invite, 'token' => $token]);
     }
 
     public function processAccept()
     {
-        $token = $this->request->getPost('token');
-
-        AccountInvitationModel::setBypassAccountScope(true);
-        $inviteModel = new AccountInvitationModel();
-        $invite = $inviteModel->where('token_hash', $token)->first();
-        AccountInvitationModel::setBypassAccountScope(false);
+        $token  = $this->request->getPost('token');
+        $invite = $this->findInvitationByToken($token);
 
         if (!$invite || $invite['accepted_at'] || strtotime($invite['expires_at']) < time()) {
             return redirect()->to(base_url('login'))->with('error', 'Invalid or expired invitation.');
@@ -293,11 +295,45 @@ class TeamController extends BaseController
             return $this->response->setJSON(['error' => 'Invalid invitation'])->setStatusCode(400);
         }
 
+        $newToken  = bin2hex(random_bytes(32));
         $newExpiry = date('Y-m-d H:i:s', strtotime('+7 days'));
-        $inviteModel->update($inviteId, ['expires_at' => $newExpiry]);
-        $this->sendInviteEmail($invite['email'], $invite['token_hash'], $invite['role']);
+        $inviteModel->update($inviteId, [
+            'expires_at' => $newExpiry,
+            'token_hash' => $this->hashInviteToken($newToken),
+        ]);
+        $emailSent = $this->sendInviteEmail($invite['email'], $newToken, $invite['role']);
+
+        if ($emailSent) {
+            session()->setFlashdata('success', "Invitation resent to {$invite['email']}.");
+        } else {
+            session()->setFlashdata('error', "Failed to send email to {$invite['email']}. You can copy the invitation link below to share it manually.");
+        }
 
         return $this->response->setJSON(['success' => true]);
+    }
+
+    public function inviteLink(string $inviteId)
+    {
+        if (!can_manage_members()) {
+            return $this->response->setJSON(['error' => 'Access denied'])->setStatusCode(403);
+        }
+
+        $inviteModel = new AccountInvitationModel();
+        $invite = $inviteModel->find($inviteId);
+        if (!$invite || $invite['accepted_at']) {
+            return $this->response->setJSON(['error' => 'Invalid invitation'])->setStatusCode(400);
+        }
+
+        $newToken = bin2hex(random_bytes(32));
+        $inviteModel->update($inviteId, [
+            'token_hash' => $this->hashInviteToken($newToken),
+            'expires_at' => date('Y-m-d H:i:s', strtotime('+7 days')),
+        ]);
+
+        return $this->response->setJSON([
+            'success' => true,
+            'link'    => base_url('team/accept/' . $newToken),
+        ]);
     }
 
     public function cancelInvitation(string $inviteId)
@@ -334,7 +370,27 @@ class TeamController extends BaseController
         ]);
     }
 
-    private function sendInviteEmail(string $email, string $token, string $role): void
+    private function hashInviteToken(string $token): string
+    {
+        return hash('sha256', $token);
+    }
+
+    private function findInvitationByToken(string $token): ?array
+    {
+        AccountInvitationModel::setBypassAccountScope(true);
+        $inviteModel = new AccountInvitationModel();
+        $invite = $inviteModel->where('token_hash', $this->hashInviteToken($token))->first();
+
+        // Legacy invites stored plaintext before hashing migration
+        if (!$invite && strlen($token) === 64 && ctype_xdigit($token)) {
+            $invite = $inviteModel->where('token_hash', $token)->first();
+        }
+        AccountInvitationModel::setBypassAccountScope(false);
+
+        return $invite ?: null;
+    }
+
+    private function sendInviteEmail(string $email, string $token, string $role): bool
     {
         $link        = base_url('team/accept/' . $token);
         // full_name is user-controlled (set via profile edit) — must be
@@ -343,8 +399,14 @@ class TeamController extends BaseController
         $roleLabel   = esc(ucfirst($role));
 
         try {
+            $config = config('Email');
+            $fromEmail = !empty($config->fromEmail) ? $config->fromEmail : 'noreply@' . ($_SERVER['HTTP_HOST'] ?? 'rovix-crm.com');
+            $fromName  = !empty($config->fromName) ? $config->fromName : 'Rovix CRM';
+
             $mail = \Config\Services::email();
+            $mail->setFrom($fromEmail, $fromName);
             $mail->setTo($email);
+            $mail->setMailType('html');
             $mail->setSubject("You've been invited to join {$accountName} on Rovix AI");
             $mail->setMessage("
                 <h2>Team Invitation</h2>
@@ -353,9 +415,16 @@ class TeamController extends BaseController
                 <p>Or copy this link: {$link}</p>
                 <p>This invitation expires in 7 days.</p>
             ");
-            $mail->send();
+
+            if (!$mail->send()) {
+                log_message('error', 'Team invite email failed to send: ' . $mail->printDebugger(['headers', 'subject', 'body']));
+                return false;
+            }
+
+            return true;
         } catch (\Throwable $e) {
-            log_message('error', 'Team invite email failed: ' . $e->getMessage());
+            log_message('error', 'Team invite email failed: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            return false;
         }
     }
 }

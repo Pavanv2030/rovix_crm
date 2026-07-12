@@ -210,6 +210,7 @@ class CatalogController extends BaseController
 
             return $this->response->setJSON(['success' => true]);
         } catch (\Exception $e) {
+            log_message('error', 'sendSingleProduct failed: ' . $e->getMessage() . ' | Phone: ' . ($contact['phone_normalized'] ?? 'unknown'));
             $messageModel->update($messageId, ['status' => 'failed', 'error_message' => $e->getMessage()]);
             return $this->response->setStatusCode(500)->setJSON(['error' => $e->getMessage()]);
         }

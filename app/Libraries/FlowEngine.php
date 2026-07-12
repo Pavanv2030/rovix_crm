@@ -41,13 +41,25 @@ class FlowEngine
      */
     public function dispatchInbound(array $payload): void
     {
-        BaseModel::setBypassAccountScope(true);
+        try {
+            BaseModel::setBypassAccountScope(true);
 
-        $accountId      = $payload['account_id'];
+            $accountId      = $payload['account_id'];
         $contactId      = $payload['contact_id'];
         $conversationId = $payload['conversation_id'];
         $messageText    = $payload['message_text'] ?? '';
         $effectiveInput = $payload['button_reply_id'] ?? $messageText;
+
+        // Rate limit: 10 flow executions per contact per 5 minutes
+        $cache = \Config\Services::cache();
+        $rateLimitKey = 'flow_rate_' . $contactId;
+        $attempts = (int)$cache->get($rateLimitKey) + 1;
+
+        if ($attempts > 10) {
+            log_message('warning', "[FlowEngine] Rate limit exceeded for contact {$contactId}");
+            return;
+        }
+        $cache->save($rateLimitKey, $attempts, 300);
 
         // If contact is already in a flow, continue it
         $activeRun = $this->runModel
@@ -115,11 +127,25 @@ class FlowEngine
             ->where('is_active', 1)
             ->findAll();
 
+        // Try keyword-based flows first (fast, deterministic)
         foreach ($flows as $flow) {
-            if ($this->matchesTrigger($flow, $messageText)) {
+            if ($flow['trigger_type'] === 'keyword' && $this->matchesTrigger($flow, $messageText)) {
                 $this->startFlow($flow, $contactId, $conversationId);
                 return;
             }
+        }
+
+        // No keyword match → try AI intent detection (slower, uses tokens)
+        $aiFlows = array_filter($flows, fn($f) => $f['trigger_type'] === 'ai_intent');
+        if (!empty($aiFlows)) {
+            $detectedFlow = $this->detectIntent($messageText, $aiFlows, $accountId);
+            if ($detectedFlow) {
+                $this->startFlow($detectedFlow, $contactId, $conversationId);
+                return;
+            }
+        }
+        } finally {
+            BaseModel::setBypassAccountScope(false);
         }
     }
 
@@ -176,6 +202,7 @@ class FlowEngine
             'send_media_buttons' => $this->handleMediaButtonResponse($run, $currentNode, $input, $conversationId),
             'send_list'          => $this->handleListResponse($run, $currentNode, $input, $conversationId),
             'request_location'   => $this->handleLocationResponse($run, $currentNode, $input, $conversationId),
+            'appointment_booking' => $this->handleAppointmentResponse($run, $currentNode, $input, $conversationId),
             default              => log_message('info', "[FlowEngine] Unexpected input at node: {$currentNode['node_type']}"),
         };
     }
@@ -317,6 +344,21 @@ class FlowEngine
                     $this->transitionToNext($run, $node, $conversationId);
                     break;
 
+                case 'trigger_flow':
+                    $this->execTriggerFlow($run, $node, $config, $conversationId, $vars);
+                    $this->transitionToNext($run, $node, $conversationId);
+                    break;
+
+                case 'send_template':
+                    $this->execSendTemplate($run, $node, $config, $conversationId, $vars);
+                    $this->transitionToNext($run, $node, $conversationId);
+                    break;
+
+                case 'appointment_booking':
+                    $this->execAppointmentBooking($run, $node, $config, $conversationId, $vars);
+                    // Waits for user input
+                    break;
+
                 default:
                     throw new \Exception('Unknown node type: ' . $node['node_type']);
             }
@@ -379,19 +421,25 @@ class FlowEngine
         $condType = $config['condition_type'] ?? 'variable_equals';
         $pass     = false;
 
-        switch ($condType) {
-            case 'variable_equals':
-                $pass = (string)($vars[$config['variable'] ?? ''] ?? '') === (string)($config['value'] ?? '');
-                break;
-            case 'variable_contains':
-                $pass = stripos((string)($vars[$config['variable'] ?? ''] ?? ''), (string)($config['substring'] ?? '')) !== false;
-                break;
-            case 'contact_has_tag':
-                $tagId = $config['tag_id'] ?? null;
-                if ($tagId && $run['contact_id']) {
-                    $pass = (bool)(new ContactTagModel())->where('contact_id', $run['contact_id'])->where('tag_id', $tagId)->first();
-                }
-                break;
+        // AI-based routing
+        if ($condType === 'ai_decision') {
+            $pass = $this->evaluateAiCondition($config, $vars, $run);
+        } else {
+            // Static rule-based conditions
+            switch ($condType) {
+                case 'variable_equals':
+                    $pass = (string)($vars[$config['variable'] ?? ''] ?? '') === (string)($config['value'] ?? '');
+                    break;
+                case 'variable_contains':
+                    $pass = stripos((string)($vars[$config['variable'] ?? ''] ?? ''), (string)($config['substring'] ?? '')) !== false;
+                    break;
+                case 'contact_has_tag':
+                    $tagId = $config['tag_id'] ?? null;
+                    if ($tagId && $run['contact_id']) {
+                        $pass = (bool)(new ContactTagModel())->where('contact_id', $run['contact_id'])->where('tag_id', $tagId)->first();
+                    }
+                    break;
+            }
         }
 
         $nextKey  = $pass ? ($config['true_node'] ?? null) : ($config['false_node'] ?? null);
@@ -401,6 +449,45 @@ class FlowEngine
             $this->executeNode($run, $nextNode, null, $conversationId);
         } else {
             $this->endFlow($run, 'completed');
+        }
+    }
+
+    /**
+     * AI-based condition evaluation.
+     * Allows natural language decision making instead of rigid if/else.
+     */
+    private function evaluateAiCondition(array $config, array $vars, array $run): bool
+    {
+        $prompt = $config['ai_prompt'] ?? '';
+        if (!$prompt) {
+            log_message('warning', '[FlowEngine] AI condition missing prompt');
+            return false;
+        }
+
+        // Interpolate variables into prompt
+        $interpolatedPrompt = $this->interpolate($prompt, $vars);
+
+        // Add decision instruction
+        $fullPrompt = "{$interpolatedPrompt}\n\n"
+            . "Based on the above information, should the condition be TRUE or FALSE? "
+            . "Reply with ONLY the word TRUE or FALSE, nothing else.";
+
+        try {
+            $conversation = (new ConversationModel())->find($run['conversation_id']);
+            $accountId = $conversation['account_id'] ?? null;
+
+            if (!$accountId) return false;
+
+            $openAI = new \App\Libraries\OpenAIService($accountId);
+            $response = trim(strtoupper($openAI->chat($fullPrompt, [], 'gpt-4o-mini')));
+
+            $result = str_contains($response, 'TRUE');
+            log_message('info', "[FlowEngine] AI condition evaluated to: " . ($result ? 'TRUE' : 'FALSE'));
+
+            return $result;
+        } catch (\Exception $e) {
+            log_message('error', "[FlowEngine] AI condition evaluation failed: " . $e->getMessage());
+            return false;
         }
     }
 
@@ -1043,10 +1130,240 @@ class FlowEngine
         return false;
     }
 
+    /**
+     * Use AI to detect which flow intent matches the user's message.
+     * Only called when no keyword flow matched.
+     */
+    private function detectIntent(string $messageText, array $aiFlows, string $accountId): ?array
+    {
+        if (empty($aiFlows)) return null;
+
+        // Build prompt with available intents
+        $intentList = [];
+        foreach ($aiFlows as $flow) {
+            $intentList[] = "- {$flow['name']}: {$flow['ai_intent_description']}";
+        }
+
+        $prompt = "User message: \"{$messageText}\"\n\n"
+            . "Available automation intents:\n"
+            . implode("\n", $intentList) . "\n\n"
+            . "Which intent best matches the user's message? "
+            . "Reply with ONLY the exact flow name, or reply NONE if no match.";
+
+        try {
+            $openAI = new \App\Libraries\OpenAIService($accountId);
+            $response = trim($openAI->chat($prompt, [], 'gpt-4o-mini'));
+
+            // Match response to flow name
+            foreach ($aiFlows as $flow) {
+                if (stripos($response, $flow['name']) !== false) {
+                    log_message('info', "[FlowEngine] AI detected intent: {$flow['name']} for message: {$messageText}");
+                    return $flow;
+                }
+            }
+
+            log_message('info', "[FlowEngine] AI returned no matching intent for: {$messageText}");
+        } catch (\Exception $e) {
+            log_message('error', "[FlowEngine] AI intent detection failed: " . $e->getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Trigger another flow programmatically from within a flow.
+     * Passes variables from current flow to the target flow.
+     */
+    private function execTriggerFlow(array $run, array $node, array $config, string $conversationId, array $vars): void
+    {
+        $targetFlowId = $config['target_flow_id'] ?? null;
+        if (!$targetFlowId) {
+            log_message('warning', "[FlowEngine] trigger_flow node {$node['node_key']} missing target_flow_id");
+            return;
+        }
+
+        $targetFlow = (new FlowModel())->find($targetFlowId);
+        if (!$targetFlow || !$targetFlow['is_active']) {
+            log_message('warning', "[FlowEngine] trigger_flow target {$targetFlowId} not found or inactive");
+            return;
+        }
+
+        // End current flow if configured
+        if ($config['end_current'] ?? false) {
+            $this->endFlow($run, 'completed');
+        }
+
+        // Start target flow with passed variables
+        $targetRunId = $this->runModel->insert([
+            'flow_id'          => $targetFlow['id'],
+            'contact_id'       => $run['contact_id'],
+            'conversation_id'  => $conversationId,
+            'status'           => 'active',
+            'current_node_key' => null,
+            'vars'             => json_encode($vars),
+            'started_at'       => date('Y-m-d H:i:s'),
+            'updated_at'       => date('Y-m-d H:i:s'),
+        ]);
+
+        (new FlowModel())->increment($targetFlow['id'], 'execution_count');
+
+        log_message('info', "[FlowEngine] Flow {$run['flow_id']} triggered flow {$targetFlowId}");
+
+        // Execute target flow from start node
+        $startNode = $this->nodeModel->where('flow_id', $targetFlow['id'])->where('node_type', 'start')->first();
+        if ($startNode) {
+            $targetRun = $this->runModel->find($targetRunId);
+            $this->executeNode($targetRun, $startNode, $conversationId);
+        }
+    }
+
+    private function execSendTemplate(array $run, array $node, array $config, string $conversationId, array $vars): void
+    {
+        $templateId = $config['template_id'] ?? null;
+        if (!$templateId) {
+            log_message('warning', "[FlowEngine] send_template missing template_id");
+            return;
+        }
+
+        $conversation = (new ConversationModel())->find($conversationId);
+        if (!$conversation) return;
+
+        $db = \Config\Database::connect();
+        $template = $db->table('message_templates')
+            ->where('id', $templateId)
+            ->where('account_id', $conversation['account_id'])
+            ->where('status', 'approved')
+            ->get()->getRowArray();
+
+        if (!$template) {
+            log_message('warning', "[FlowEngine] Template {$templateId} not found or not approved");
+            return;
+        }
+
+        $contact = (new ContactModel())->find($conversation['contact_id']);
+        if (!$contact) return;
+
+        $waConfig = (new WhatsAppConfigModel())->where('account_id', $conversation['account_id'])->first();
+        if (!$waConfig || ($waConfig['status'] ?? '') !== 'connected') return;
+
+        // Build template parameters from config
+        $params = [];
+        foreach ($config['template_params'] ?? [] as $param) {
+            if (!empty($param['key'])) {
+                $params[$param['key']] = $this->interpolate($param['value'] ?? '', $vars);
+            }
+        }
+
+        $token = (new Encryption())->decrypt($waConfig['access_token']);
+
+        try {
+            $response = (new MetaApi())->sendTemplate(
+                $waConfig['phone_number_id'],
+                $token,
+                $contact['phone_normalized'],
+                $template['name'],
+                $template['language_code'] ?? 'en',
+                $params
+            );
+            $this->logNonTextMessageToInbox($conversationId, 'template', 'Template: ' . $template['name'], $response['messages'][0]['id'] ?? null, '[Template]');
+        } catch (\Exception $e) {
+            log_message('error', "[FlowEngine] send_template failed: " . $e->getMessage());
+        }
+    }
+
+    private function saveVars(array $run, array $vars): void
+    {
+        $this->runModel->update($run['id'], ['vars' => json_encode($vars), 'updated_at' => date('Y-m-d H:i:s')]);
+    }
+
+    private function execAppointmentBooking(array $run, array $node, array $config, string $conversationId, array $vars): void
+    {
+        $prompt = $this->interpolate($config['prompt_text'] ?? 'Please provide appointment details.', $vars);
+        $this->sendText($conversationId, $prompt);
+
+        // Store config in vars for multi-step collection
+        $vars['_appt_' . $node['node_key'] . '_config'] = json_encode($config);
+        $vars['_appt_' . $node['node_key'] . '_step'] = 'date';
+        $this->saveVars($run, $vars);
+    }
+
+    private function handleAppointmentResponse(array $run, array $node, string $input, string $conversationId): void
+    {
+        $vars = json_decode($run['vars'] ?? '{}', true) ?? [];
+        $configKey = '_appt_' . $node['node_key'] . '_config';
+        $stepKey = '_appt_' . $node['node_key'] . '_step';
+
+        $config = json_decode($vars[$configKey] ?? '{}', true) ?? [];
+        $step = $vars[$stepKey] ?? 'date';
+
+        switch ($step) {
+            case 'date':
+                $vars[$config['date_variable'] ?? 'appointment_date'] = $input;
+                $this->syncVariableToContact($run['contact_id'] ?? null, $config['date_variable'] ?? 'appointment_date', $input);
+                $vars[$stepKey] = 'time';
+                $this->saveVars($run, $vars);
+                $this->sendText($conversationId, 'What time would you prefer?');
+                break;
+
+            case 'time':
+                $vars[$config['time_variable'] ?? 'appointment_time'] = $input;
+                $this->syncVariableToContact($run['contact_id'] ?? null, $config['time_variable'] ?? 'appointment_time', $input);
+
+                if (!empty($config['name_variable'])) {
+                    $vars[$stepKey] = 'name';
+                    $this->saveVars($run, $vars);
+                    $this->sendText($conversationId, 'Please provide your full name.');
+                } else {
+                    $this->finishAppointment($run, $node, $vars, $conversationId, $config);
+                }
+                break;
+
+            case 'name':
+                $vars[$config['name_variable']] = $input;
+                $this->syncVariableToContact($run['contact_id'] ?? null, $config['name_variable'], $input);
+
+                if (!empty($config['notes_variable'])) {
+                    $vars[$stepKey] = 'notes';
+                    $this->saveVars($run, $vars);
+                    $this->sendText($conversationId, 'Any notes or special requests? (Type "skip" to skip)');
+                } else {
+                    $this->finishAppointment($run, $node, $vars, $conversationId, $config);
+                }
+                break;
+
+            case 'notes':
+                if (strtolower(trim($input)) !== 'skip') {
+                    $vars[$config['notes_variable']] = $input;
+                    $this->syncVariableToContact($run['contact_id'] ?? null, $config['notes_variable'], $input);
+                }
+                $this->finishAppointment($run, $node, $vars, $conversationId, $config);
+                break;
+        }
+    }
+
+    private function finishAppointment(array $run, array $node, array $vars, string $conversationId, array $config): void
+    {
+        // Clean up internal state vars
+        unset($vars['_appt_' . $node['node_key'] . '_config']);
+        unset($vars['_appt_' . $node['node_key'] . '_step']);
+
+        $this->saveVars($run, $vars);
+        $run['vars'] = json_encode($vars);
+
+        $confirmationMsg = $this->interpolate($config['confirmation_message'] ?? 'Appointment confirmed!', $vars);
+        if ($confirmationMsg) {
+            $this->sendText($conversationId, $confirmationMsg);
+        }
+
+        $this->transitionToNext($run, $node, $conversationId);
+    }
+
     private function interpolate(string $text, array $vars): string
     {
         foreach ($vars as $key => $value) {
-            $text = str_replace('{{' . $key . '}}', (string)$value, $text);
+            // Cap variable length to prevent DoS via massive user input
+            $safeValue = mb_strimwidth((string)$value, 0, 1000, '...');
+            $text = str_replace('{{' . $key . '}}', $safeValue, $text);
         }
         return $text;
     }

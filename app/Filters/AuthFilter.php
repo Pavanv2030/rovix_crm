@@ -12,6 +12,7 @@ class AuthFilter implements FilterInterface
         'login',
         'signup',
         'forgot-password',
+        'reset-password',
         'api/whatsapp/webhook',
     ];
 
@@ -22,6 +23,8 @@ class AuthFilter implements FilterInterface
         // Always allow join/* and team/accept/* routes (unauthenticated)
         if (str_starts_with($path, 'join/') || $path === 'join') return;
         if (str_starts_with($path, 'team/accept')) return;
+        if (str_starts_with($path, 'media/template/')) return;
+        if (str_starts_with($path, 'reset-password/')) return;
 
         // Always allow public routes
         foreach ($this->publicRoutes as $route) {
@@ -33,8 +36,13 @@ class AuthFilter implements FilterInterface
             }
         }
 
-        // Require authentication
+        // Require authentication (session or API key handled by ApiKeyFilter)
         if (!session('user_id')) {
+            if (str_starts_with($path, 'api/')) {
+                return service('response')
+                    ->setStatusCode(401)
+                    ->setJSON(['error' => 'Authentication required.']);
+            }
             return redirect()->to(base_url('login'));
         }
 
@@ -44,9 +52,12 @@ class AuthFilter implements FilterInterface
             return redirect()->to(base_url('login'))->with('error', 'Your account has been deactivated. Contact an admin.');
         }
 
-        // Update last_seen_at (throttled: once per 5 minutes max)
+        // Update last_seen_at (throttled: once per 5 minutes max).
+        // Skip on inbox poll routes — they fire every few seconds and don't
+        // need a DB write on each request.
+        $isInboxPoll = str_starts_with($path, 'api/inbox/');
         $lastSeen = session('last_seen_updated_at') ?? 0;
-        if ((time() - $lastSeen) > 300) {
+        if (!$isInboxPoll && (time() - $lastSeen) > 300) {
             try {
                 $profileModel = new \App\Models\ProfileModel();
                 $profileModel->where('user_id', session('user_id'))->set(['last_seen_at' => date('Y-m-d H:i:s')])->update();

@@ -3,6 +3,7 @@
 namespace App\Controllers\Api;
 
 use App\Controllers\BaseController;
+use App\Libraries\BroadcastAudience;
 use App\Libraries\WhatsApp\Encryption;
 use App\Libraries\WhatsApp\MetaApi;
 use App\Libraries\WhatsApp\PhoneUtils;
@@ -12,29 +13,43 @@ use App\Models\ContactModel;
 use App\Models\ConversationModel;
 use App\Models\MessageModel;
 use App\Models\MessageTemplateModel;
-use App\Models\TagModel;
 use App\Models\WhatsAppConfigModel;
 
 class BroadcastsController extends BaseController
 {
     public function countRecipients()
     {
+        if (!can_send_messages()) {
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'Access denied']);
+        }
+
         $body         = json_decode($this->request->getBody(), true) ?? [];
         $audienceType = $body['audience_type'] ?? 'all';
         $tagIds       = $body['tag_ids'] ?? [];
-
-        $contactModel = new ContactModel();
+        $accountId    = session('account_id');
+        $db           = \Config\Database::connect();
+        $unsubTagId   = BroadcastAudience::unsubscribedTagId($accountId);
 
         if ($audienceType === 'all') {
-            $count = $contactModel->countAllResults();
+            $builder = $db->table('contacts')->where('account_id', $accountId);
+            if ($unsubTagId) {
+                $builder->where("id NOT IN (SELECT contact_id FROM contact_tags WHERE tag_id = '{$unsubTagId}')");
+            }
+            $count = $builder->countAllResults();
         } elseif ($audienceType === 'tags' && !empty($tagIds)) {
-            $db    = \Config\Database::connect();
-            $count = $db->table('contacts c')
-                ->join('contact_tags ct', 'ct.contact_id = c.id')
-                ->whereIn('ct.tag_id', $tagIds)
-                ->where('c.account_id', session('account_id'))
-                ->groupBy('c.id')
-                ->countAllResults();
+            $ownedTagIds = BroadcastAudience::filterOwnedTagIds((array) $tagIds, $accountId);
+            if (empty($ownedTagIds)) {
+                $count = 0;
+            } else {
+                $query = $db->table('contacts c')
+                    ->join('contact_tags ct', 'ct.contact_id = c.id')
+                    ->whereIn('ct.tag_id', $ownedTagIds)
+                    ->where('c.account_id', $accountId);
+                if ($unsubTagId) {
+                    $query->where("c.id NOT IN (SELECT contact_id FROM contact_tags WHERE tag_id = '{$unsubTagId}')");
+                }
+                $count = $query->groupBy('c.id')->countAllResults();
+            }
         } else {
             $count = 0;
         }
@@ -66,10 +81,16 @@ class BroadcastsController extends BaseController
 
     public function quickSend()
     {
+        if (!can_send_messages()) {
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'Access denied']);
+        }
+
         $templateId  = $this->request->getPost('template_id');
         $numbersRaw  = $this->request->getPost('numbers') ?? '';
         $scheduleAt  = $this->request->getPost('schedule_at'); // optional datetime-local value
         $headerUrl   = trim($this->request->getPost('header_url') ?? '');
+        $accountId   = session('account_id');
+        $unsubTagId  = BroadcastAudience::unsubscribedTagId($accountId);
 
         if (!$templateId || !trim($numbersRaw)) {
             return $this->response->setStatusCode(400)->setJSON(['error' => 'template_id and numbers required']);
@@ -84,7 +105,39 @@ class BroadcastsController extends BaseController
             return $this->response->setStatusCode(400)->setJSON(['error' => 'This template has a media header — a header URL is required']);
         }
 
-        $numbers = array_values(array_filter(array_map('trim', preg_split('/[\r\n,]+/', $numbersRaw))));
+        $numbers = array_values(array_unique(array_filter(array_map('trim', preg_split('/[\r\n,]+/', $numbersRaw)))));
+
+        if (count($numbers) > 200) {
+            return $this->response->setStatusCode(400)->setJSON(['error' => 'Maximum 200 numbers per quick send']);
+        }
+
+        $contactModel = new ContactModel();
+        $validated    = [];
+        $rejected     = [];
+
+        foreach ($numbers as $num) {
+            $normalized = PhoneUtils::normalize($num);
+            $contact    = $normalized ? $contactModel->where('phone_normalized', $normalized)->first() : null;
+
+            if (!$contact) {
+                $rejected[] = "$num: not in your contacts";
+                continue;
+            }
+            if (BroadcastAudience::isUnsubscribed($contact['id'], $unsubTagId)) {
+                $rejected[] = "$num: unsubscribed";
+                continue;
+            }
+            $validated[] = ['raw' => $num, 'normalized' => $normalized, 'contact' => $contact];
+        }
+
+        if (empty($validated)) {
+            return $this->response->setStatusCode(400)->setJSON([
+                'error'  => 'No valid recipients. Numbers must belong to your contacts and must not be unsubscribed.',
+                'errors' => $rejected,
+            ]);
+        }
+
+        $numbers = array_map(fn($row) => $row['raw'], $validated);
 
         // If scheduled — store as broadcast record, picked up by run:scheduled command
         if ($scheduleAt) {
@@ -152,24 +205,12 @@ class BroadcastsController extends BaseController
         ]);
 
         $recipientModel = new \App\Models\BroadcastRecipientModel();
-        $contactModel   = new ContactModel();
-        $sent = 0; $failed = 0; $errors = [];
+        $sent = 0; $failed = 0; $errors = $rejected;
 
-        foreach ($numbers as $num) {
-            $normalized = PhoneUtils::normalize($num);
-            $contact    = $normalized ? $contactModel->where('phone_normalized', $normalized)->first() : null;
-
-            if (!$normalized) {
-                $failed++;
-                $errors[] = "$num: invalid";
-                $recipientModel->insert([
-                    'broadcast_id'  => $broadcastId,
-                    'status'        => 'failed',
-                    'error_message' => 'Invalid phone number',
-                    'created_at'    => date('Y-m-d H:i:s'),
-                ]);
-                continue;
-            }
+        foreach ($validated as $row) {
+            $num        = $row['raw'];
+            $normalized = $row['normalized'];
+            $contact    = $row['contact'];
 
             try {
                 $response = $metaApi->sendTemplate(

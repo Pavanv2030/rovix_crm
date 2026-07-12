@@ -1,0 +1,4 @@
+# Rovix CRM Scheduled Tasks
+
+# Daily digest - Send at 9:00 AM every day
+0 9 * * * cd C:\xampp\htdocs\rovix-crm && php spark crm:send-daily-digest >> C:\xampp\htdocs\rovix-crm\writable\logs\cron-digest.log 2>&1

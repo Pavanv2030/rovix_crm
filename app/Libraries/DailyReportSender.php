@@ -5,18 +5,14 @@ namespace App\Libraries;
 use App\Models\AccountModel;
 use App\Models\WhatsAppConfigModel;
 use App\Models\MessageTemplateModel;
-use App\Models\ContactModel;
-use App\Models\MessageModel;
-use App\Models\AppointmentModel;
 use App\Libraries\WhatsApp\MetaApi;
 use App\Libraries\WhatsApp\Encryption;
 use App\Libraries\WhatsApp\TemplateSendBuilder;
 
 /**
- * Sends the daily WhatsApp report to an account's configured founder/HR
- * numbers. Always via an Approved Template — founder/HR don't have an open
- * 24h session with the business number, so a plain text message would get
- * rejected by Meta on any day they haven't messaged the bot themselves.
+ * Sends the daily executive report to founder and HR via:
+ * 1. Professional HTML email (full report)
+ * 2. WhatsApp approved template (executive summary)
  */
 class DailyReportSender
 {
@@ -28,17 +24,38 @@ class DailyReportSender
             return;
         }
 
-        $prefs         = json_decode($account['notification_preferences'] ?? '{}', true) ?? [];
-        $founderNumber = trim($prefs['daily_report_founder_number'] ?? '');
-        $hrNumber      = trim($prefs['daily_report_hr_number'] ?? '');
-        $templateId    = $prefs['daily_report_template_id'] ?? null;
+        $prefs          = json_decode($account['notification_preferences'] ?? '{}', true) ?? [];
+        $founderNumber  = trim($prefs['daily_report_founder_number'] ?? '');
+        $hrNumber       = trim($prefs['daily_report_hr_number'] ?? '');
+        $founderEmail   = trim($prefs['daily_report_founder_email'] ?? '');
+        $hrEmail        = trim($prefs['daily_report_hr_email'] ?? '');
+        $templateId     = $prefs['daily_report_template_id'] ?? null;
 
-        $recipients = array_filter([$founderNumber, $hrNumber]);
-        if (empty($recipients)) {
+        $whatsappRecipients = array_filter([
+            'founder' => $founderNumber,
+            'hr'      => $hrNumber,
+        ]);
+
+        $emailRecipients = array_filter([
+            'founder' => $founderEmail,
+            'hr'      => $hrEmail,
+        ]);
+
+        if (empty($whatsappRecipients) && empty($emailRecipients)) {
             return;
         }
+
+        $digest = new DailyDigestService();
+        $stats  = $digest->generateStats($accountId);
+
+        $this->sendEmails($digest, $stats, $emailRecipients, $account['name'] ?? 'Team');
+
+        if (empty($whatsappRecipients)) {
+            return;
+        }
+
         if (!$templateId) {
-            log_message('warning', "[DailyReportSender] account {$accountId} has recipients but no template selected — skipping");
+            log_message('warning', "[DailyReportSender] account {$accountId} has WhatsApp recipients but no template — email only");
             return;
         }
 
@@ -54,23 +71,17 @@ class DailyReportSender
             return;
         }
 
-        $stats = $this->gatherStats($accountId);
-
-        $variables = [
-            'body_1' => date('d M Y'),
-            'body_2' => (string) $stats['new_leads'],
-            'body_3' => (string) $stats['messages_sent'],
-            'body_4' => (string) $stats['messages_received'],
-            'body_5' => (string) $stats['appointments_booked'],
-        ];
-
-        $components  = TemplateSendBuilder::buildComponents($template, $variables);
         $accessToken = (new Encryption())->decrypt($waConfig['access_token']);
         $metaApi     = new MetaApi();
 
-        foreach ($recipients as $number) {
+        foreach ($whatsappRecipients as $role => $number) {
             $normalized = \App\Libraries\WhatsApp\PhoneUtils::normalize($number);
-            if (!$normalized) continue;
+            if (!$normalized) {
+                continue;
+            }
+
+            $variables  = $digest->formatTemplateVariables($stats, $role);
+            $components = TemplateSendBuilder::buildComponents($template, $variables);
 
             try {
                 $metaApi->sendTemplate(
@@ -82,42 +93,42 @@ class DailyReportSender
                     $components
                 );
             } catch (\Exception $e) {
-                log_message('error', "[DailyReportSender] send to {$number} failed: " . $e->getMessage());
+                log_message('error', "[DailyReportSender] WhatsApp to {$number} failed: " . $e->getMessage());
             }
         }
     }
 
-    private function gatherStats(string $accountId): array
+    private function sendEmails(DailyDigestService $digest, array $stats, array $recipients, string $accountName): void
     {
-        $today = date('Y-m-d');
+        if (empty($recipients)) {
+            return;
+        }
 
-        $newLeads = (new ContactModel())
-            ->where('account_id', $accountId)
-            ->where('created_at >=', $today . ' 00:00:00')
-            ->countAllResults();
+        $config    = config('Email');
+        $fromEmail = !empty($config->fromEmail) ? $config->fromEmail : 'noreply@' . ($_SERVER['HTTP_HOST'] ?? 'rovix-crm.com');
+        $fromName  = !empty($config->fromName) ? $config->fromName : 'Rovix CRM';
+        $subject   = 'Daily Executive Report — ' . $accountName . ' — ' . ($stats['report_date'] ?? date('j M Y'));
 
-        $messagesSent = (new MessageModel())
-            ->where('account_id', $accountId)
-            ->where('sender_type', 'agent')
-            ->where('created_at >=', $today . ' 00:00:00')
-            ->countAllResults();
+        foreach ($recipients as $role => $email) {
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                log_message('warning', "[DailyReportSender] Invalid email for {$role}: {$email}");
+                continue;
+            }
 
-        $messagesReceived = (new MessageModel())
-            ->where('account_id', $accountId)
-            ->where('sender_type', 'customer')
-            ->where('created_at >=', $today . ' 00:00:00')
-            ->countAllResults();
+            try {
+                $mail = \Config\Services::email();
+                $mail->setFrom($fromEmail, $fromName);
+                $mail->setTo($email);
+                $mail->setMailType('html');
+                $mail->setSubject($subject);
+                $mail->setMessage($digest->renderEmailHtml($stats, $role));
 
-        $appointmentsBooked = (new AppointmentModel())
-            ->where('account_id', $accountId)
-            ->where('created_at >=', $today . ' 00:00:00')
-            ->countAllResults();
-
-        return [
-            'new_leads'           => $newLeads,
-            'messages_sent'       => $messagesSent,
-            'messages_received'  => $messagesReceived,
-            'appointments_booked' => $appointmentsBooked,
-        ];
+                if (!$mail->send()) {
+                    log_message('error', "[DailyReportSender] Email to {$email} failed: " . $mail->printDebugger(['headers', 'subject']));
+                }
+            } catch (\Throwable $e) {
+                log_message('error', "[DailyReportSender] Email to {$email} failed: " . $e->getMessage());
+            }
+        }
     }
 }

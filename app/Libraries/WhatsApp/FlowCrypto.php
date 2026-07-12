@@ -27,9 +27,16 @@ class FlowCrypto
             'C:\\Program Files\\Git\\usr\\bin\\openssl.exe',
         ];
         foreach ($candidates as $c) {
-            if (is_file($c)) return $c;
+            if (is_file($c)) {
+                // Verify it's the real openssl binary, not a malicious replacement
+                $output = @shell_exec(escapeshellarg($c) . ' version 2>&1');
+                if ($output && stripos($output, 'OpenSSL') !== false) {
+                    return $c;
+                }
+                log_message('error', "Invalid or suspicious openssl binary at {$c}");
+            }
         }
-        return 'openssl'; // fall back to PATH
+        throw new \Exception('openssl binary not found or invalid');
     }
 
     /**

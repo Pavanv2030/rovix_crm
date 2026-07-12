@@ -71,8 +71,10 @@ class CatalogController extends BaseController
         try {
             $accessToken = (new Encryption())->decrypt($waConfig['access_token']);
             (new MetaApi())->enableCommerceSettings($waConfig['phone_number_id'], $accessToken);
+            log_message('info', 'Commerce settings enabled for phone_number_id: ' . $waConfig['phone_number_id']);
         } catch (\Exception $e) {
             log_message('error', 'enableCommerceSettings failed during catalog connect: ' . $e->getMessage());
+            // Continue anyway - catalog connect should work even if this fails
         }
 
         return $this->response->setJSON(['success' => true, 'product_count' => 0]);

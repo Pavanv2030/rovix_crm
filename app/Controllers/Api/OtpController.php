@@ -38,8 +38,13 @@ class OtpController extends BaseController
             return $this->jsonError("Please wait {$wait} second(s) before requesting another OTP.", 429);
         }
 
+        $accountId = session('account_id');
+        if (!$accountId) {
+            return $this->jsonError('Authentication required.', 401);
+        }
+
         $service = new WhatsappOtpService();
-        $result  = $service->sendOtp($phone, session('account_id'));
+        $result  = $service->sendOtp($phone, $accountId);
 
         if (!$result['success']) {
             return $this->jsonError($result['message'], 500);

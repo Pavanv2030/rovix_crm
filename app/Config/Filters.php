@@ -15,15 +15,6 @@ use CodeIgniter\Filters\SecureHeaders;
 
 class Filters extends BaseFilters
 {
-    /**
-     * Configures aliases for Filter classes to
-     * make reading things nicer and simpler.
-     *
-     * @var array<string, class-string|list<class-string>>
-     *
-     * [filter_name => classname]
-     * or [filter_name => [classname1, classname2, ...]]
-     */
     public array $aliases = [
         'csrf'          => CSRF::class,
         'toolbar'       => DebugToolbar::class,
@@ -37,77 +28,113 @@ class Filters extends BaseFilters
         'auth'               => \App\Filters\AuthFilter::class,
         'account'            => \App\Filters\AccountFilter::class,
         'role'               => \App\Filters\RoleFilter::class,
+        'write_role'         => \App\Filters\WriteRoleFilter::class,
+        'api_key'            => \App\Filters\ApiKeyFilter::class,
         'webhook_signature'  => \App\Filters\WebhookSignatureFilter::class,
+        'rate_limit'         => \App\Filters\RateLimitFilter::class,
     ];
 
-    /**
-     * List of special required filters.
-     *
-     * The filters listed here are special. They are applied before and after
-     * other kinds of filters, and always applied even if a route does not exist.
-     *
-     * Filters set by default provide framework functionality. If removed,
-     * those functions will no longer work.
-     *
-     * @see https://codeigniter.com/user_guide/incoming/filters.html#provided-filters
-     *
-     * @var array{before: list<string>, after: list<string>}
-     */
     public array $required = [
         'before' => [
-            'forcehttps', // Force Global Secure Requests
-            'pagecache',  // Web Page Caching
+            'forcehttps',
         ],
         'after' => [
-            'pagecache',   // Web Page Caching
-            'performance', // Performance Metrics
-            'toolbar',     // Debug Toolbar
+            'performance',
         ],
     ];
 
-    /**
-     * List of filter aliases that are always
-     * applied before and after every request.
-     *
-     * @var array{
-     *     before: array<string, array{except: list<string>|string}>|list<string>,
-     *     after: array<string, array{except: list<string>|string}>|list<string>
-     * }
-     */
     public array $globals = [
         'before' => [
-            'auth'    => ['except' => ['webhook/*', 'api/flows/data-exchange', 'booking/*']],
-            'account' => ['except' => ['webhook/*', 'api/flows/data-exchange', 'booking/*']],
+            'api_key' => ['except' => ['webhook/*', 'api/whatsapp/webhook', 'api/flows/data-exchange', 'booking/*', 'media/template/*', 'demo/send-report', 'login', 'signup', 'forgot-password', 'reset-password/*', 'team/accept/*']],
+            'csrf'    => ['except' => ['webhook/*', 'api/whatsapp/webhook', 'api/flows/data-exchange', 'booking/*', 'demo/send-report']],
+            'auth'    => ['except' => ['webhook/*', 'api/whatsapp/webhook', 'api/flows/data-exchange', 'booking/*', 'media/template/*', 'demo/send-report']],
+            'account' => ['except' => ['webhook/*', 'api/whatsapp/webhook', 'api/flows/data-exchange', 'booking/*', 'media/template/*', 'demo/send-report']],
         ],
         'after' => [
-            // 'honeypot',
-            // 'secureheaders',
+            'secureheaders',
         ],
     ];
 
-    /**
-     * List of filter aliases that works on a
-     * particular HTTP method (GET, POST, etc.).
-     *
-     * Example:
-     * 'POST' => ['foo', 'bar']
-     *
-     * If you use this, you should disable auto-routing because auto-routing
-     * permits any HTTP method to access a controller. Accessing the controller
-     * with a method you don't expect could bypass the filter.
-     *
-     * @var array<string, list<string>>
-     */
     public array $methods = [];
 
-    /**
-     * List of filter aliases that should run on any
-     * before or after URI patterns.
-     *
-     * Example:
-     * 'isLoggedIn' => ['before' => ['account/*', 'profiles/*']]
-     *
-     * @var array<string, array<string, list<string>>>
-     */
-    public array $filters = [];
+    public array $filters = [
+        'rate_limit' => [
+            'before' => [
+                'login',
+                'signup',
+                'api/otp/send',
+                'api/otp/verify',
+                'team/accept/process',
+                'forgot-password',
+                'booking/*/reschedule',
+            ],
+        ],
+        'role:agent' => [
+            'before' => [
+                'api/whatsapp/send',
+                'api/whatsapp/send-template',
+                'api/whatsapp/react',
+                'api/deals/*/move',
+                'api/deals/*/assign',
+                'api/deals/*/value',
+                'api/deals/*/whatsapp',
+                'api/deals/*/generate-message',
+                'api/conversations/assign',
+                'api/conversations/status',
+                'api/conversations/lead-status',
+                'api/conversations/tag',
+                'api/conversations/note',
+                'api/contacts/note',
+                'api/media/upload',
+                'api/ai/translate-outgoing',
+                'api/ai/rewrite',
+                'api/ai/translate-incoming',
+                'api/tags',
+                'api/tags/*',
+                'api/custom-fields',
+                'api/custom-fields/*',
+                'api/lead-statuses',
+                'api/lead-statuses/*',
+                'api/pipelines/*/stages',
+                'api/stages/*',
+                'api/stages/reorder',
+                'api/catalog/send-catalog',
+                'api/catalog/send-product',
+                'api/catalog/send-multi-product',
+                'api/appointments/send-flow',
+                'api/broadcasts/quick-send',
+                'api/broadcasts/count-recipients',
+            ],
+        ],
+        'write_role:agent' => [
+            'before' => [
+                'broadcasts',
+                'broadcasts/*',
+                'contacts',
+                'contacts/*',
+                'templates',
+                'templates/*',
+                'flows',
+                'flows/*',
+                'automations',
+                'automations/*',
+                'pipelines',
+                'pipelines/*',
+                'deals',
+                'deals/*',
+                'catalog',
+                'catalog/*',
+                'appointments',
+                'appointments/*',
+                'settings',
+                'settings/*',
+            ],
+        ],
+        'write_role:admin' => [
+            'before' => [
+                'team',
+                'team/*',
+            ],
+        ],
+    ];
 }

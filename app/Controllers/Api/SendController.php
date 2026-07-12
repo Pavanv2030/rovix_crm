@@ -74,15 +74,13 @@ class SendController extends BaseController
             ]);
 
             (new ConversationModel())->update($conversationId, [
-                'last_message_text' => substr($contentText, 0, 200),
+                'last_message_text' => mb_substr($contentText, 0, 200),
                 'last_message_at'   => date('Y-m-d H:i:s'),
             ]);
 
-            return $this->response->setJSON([
-                'success'              => true,
-                'message_id'           => $messageId,
-                'whatsapp_message_id'  => $response['messages'][0]['id'],
-            ]);
+            $saved = $messageModel->find($messageId);
+
+            return $this->response->setJSON($this->messagePayload($saved, $contact, true, $response['messages'][0]['id'] ?? null));
 
         } catch (\Exception $e) {
             $messageModel->update($messageId, [
@@ -90,8 +88,27 @@ class SendController extends BaseController
                 'error_message' => $e->getMessage(),
             ]);
 
-            return $this->response->setStatusCode(500)->setJSON(['error' => 'Failed to send message: ' . $e->getMessage()]);
+            $saved = $messageModel->find($messageId);
+
+            return $this->response->setStatusCode(500)->setJSON(
+                $this->messagePayload($saved, $contact, false, null, $e->getMessage())
+            );
         }
+    }
+
+    private function messagePayload(array $message, array $contact, bool $success, ?string $whatsappMessageId = null, ?string $error = null): array
+    {
+        $message['reactions'] = [];
+        $message['quoted']    = null;
+
+        return [
+            'success'             => $success,
+            'message_id'          => $message['id'],
+            'whatsapp_message_id' => $whatsappMessageId,
+            'last_at'             => $message['created_at'],
+            'html'                => view('inbox/partials/message_bubble', ['msg' => $message, 'contact' => $contact]),
+            'error'               => $error,
+        ];
     }
 
     public function sendTemplate()
@@ -167,11 +184,17 @@ class SendController extends BaseController
                 'last_message_at'   => date('Y-m-d H:i:s'),
             ]);
 
-            return $this->response->setJSON(['success' => true]);
+            $saved = $messageModel->find($messageId);
+
+            return $this->response->setJSON($this->messagePayload($saved, $contact, true, $response['messages'][0]['id'] ?? null));
 
         } catch (\Exception $e) {
             $messageModel->update($messageId, ['status' => 'failed', 'error_message' => $e->getMessage()]);
-            return $this->response->setStatusCode(500)->setJSON(['error' => $e->getMessage()]);
+            $saved = $messageModel->find($messageId);
+
+            return $this->response->setStatusCode(500)->setJSON(
+                $this->messagePayload($saved, $contact, false, null, $e->getMessage())
+            );
         }
     }
 }

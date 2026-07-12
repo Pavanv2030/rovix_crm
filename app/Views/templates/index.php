@@ -308,7 +308,11 @@ async function fetchFromMeta() {
         const data = await r.json();
         if (data.success) {
             res.className = 'mb-4 px-4 py-3 rounded-lg text-sm bg-green-50 border border-green-200 text-green-800';
-            res.textContent = `Synced ${data.synced} template(s) from Meta. Refreshing…`;
+            let msg = `Synced ${data.synced} template(s) from Meta.`;
+            if (data.waba_corrected) {
+                msg += ' Your WhatsApp Business Account ID was auto-corrected in Settings.';
+            }
+            res.textContent = msg + ' Refreshing…';
             setTimeout(() => location.reload(), 1500);
         } else {
             res.className = 'mb-4 px-4 py-3 rounded-lg text-sm bg-red-50 border border-red-200 text-red-700';

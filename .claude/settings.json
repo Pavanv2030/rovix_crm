@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:\\\\xampp\\\\php\\\\php.exe\" -l app/Libraries/FlowEngine.php)",
+      "Bash(\"C:\\\\xampp\\\\php\\\\php.exe\" -l app/Libraries/WhatsApp/MetaApi.php)",
+      "Bash(\"C:\\\\xampp\\\\php\\\\php.exe\" -l app/Libraries/BroadcastProcessor.php)"
+    ]
+  }
+}

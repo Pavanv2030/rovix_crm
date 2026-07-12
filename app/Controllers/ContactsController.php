@@ -181,12 +181,15 @@ class ContactsController extends BaseController
             'created_at'         => date('Y-m-d H:i:s'),
         ]);
 
-        // Tags
+        // Tags (only tags owned by this account)
         $tagIds = $this->request->getPost('tag_ids') ?? [];
         if ($tagIds) {
-            $ctModel = new ContactTagModel();
+            $ctModel  = new ContactTagModel();
+            $tagModel = new \App\Models\TagModel();
             foreach ($tagIds as $tagId) {
-                $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
+                if ($tagModel->find($tagId)) {
+                    $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
+                }
             }
         }
 
@@ -194,7 +197,11 @@ class ContactsController extends BaseController
         $customValues = $this->request->getPost('custom_fields') ?? [];
         if ($customValues) {
             $cfvModel = new ContactCustomValueModel();
+            $customFieldModel = new \App\Models\CustomFieldModel();
             foreach ($customValues as $fieldId => $value) {
+                if (!$customFieldModel->find($fieldId)) {
+                    continue;
+                }
                 if ($value !== '' && $value !== null) {
                     $cfvModel->insert(['contact_id' => $contactId, 'custom_field_id' => $fieldId, 'value' => $value]);
                 }
@@ -262,18 +269,25 @@ class ContactsController extends BaseController
             'updated_at'        => date('Y-m-d H:i:s'),
         ]);
 
-        // Sync tags — delete all then re-insert
-        $ctModel = new ContactTagModel();
+        // Sync tags — delete all then re-insert (only tags owned by this account)
+        $ctModel  = new ContactTagModel();
+        $tagModel = new \App\Models\TagModel();
         $ctModel->where('contact_id', $contactId)->delete();
         $tagIds = $this->request->getPost('tag_ids') ?? [];
         foreach ($tagIds as $tagId) {
-            $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
+            if ($tagModel->find($tagId)) {
+                $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
+            }
         }
 
         // Sync custom fields
         $cfvModel     = new ContactCustomValueModel();
         $customValues = $this->request->getPost('custom_fields') ?? [];
+        $customFieldModel = new \App\Models\CustomFieldModel();
         foreach ($customValues as $fieldId => $value) {
+            if (!$customFieldModel->find($fieldId)) {
+                continue;
+            }
             $existing = $cfvModel->where('contact_id', $contactId)->where('custom_field_id', $fieldId)->first();
             if ($existing) {
                 if ($value !== '') {

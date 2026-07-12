@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Models\ActivityLogModel;
 use App\Models\AutomationModel;
 use App\Models\AutomationStepModel;
 use App\Models\AutomationLogModel;
@@ -175,6 +176,9 @@ class AutomationsController extends BaseController
         // Replace steps
         (new AutomationStepModel())->where('automation_id', $id)->delete();
         $this->saveSteps($id, $stepsJson);
+
+        // Audit trail
+        ActivityLogModel::record('automation.updated', 'automation', $id, ['name' => $name, 'trigger_type' => $triggerType]);
 
         return redirect()->to(base_url('automations/' . $id))->with('success', 'Automation updated.');
     }

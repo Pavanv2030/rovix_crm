@@ -3,17 +3,20 @@
 namespace App\Controllers\Api;
 
 use App\Controllers\BaseController;
+use App\Libraries\BroadcastAudience;
 use App\Libraries\JobDispatcher;
 use App\Libraries\LeadStatusApplier;
 use App\Libraries\WhatsApp\MetaApi;
 use App\Libraries\WhatsApp\PhoneUtils;
 use App\Models\BaseModel;
 use App\Models\ContactModel;
+use App\Models\ContactTagModel;
 use App\Models\ConversationModel;
 use App\Models\ConversationStatusModel;
 use App\Models\MessageModel;
 use App\Models\MessageReactionModel;
 use App\Models\MessageTemplateModel;
+use App\Models\TagModel;
 use App\Models\WhatsAppConfigModel;
 use App\Models\AccountModel;
 
@@ -51,10 +54,19 @@ class WebhookController extends BaseController
         $accountId    = null;
         $eventType    = 'unknown';
 
+        $body         = [];
+        $messageCount = 0;
+
         try {
             BaseModel::setBypassAccountScope(true);
 
-            $body = $this->request->getJSON(true);
+            $body = $this->request->getJSON(true) ?? [];
+
+            // Validate payload structure
+            if (!isset($body['entry']) || !is_array($body['entry'])) {
+                log_message('warning', 'Invalid webhook payload structure: missing or invalid entry field');
+                return $this->response->setStatusCode(200)->setJSON(['status' => 'ok']);
+            }
 
             if (empty($body['entry'])) {
                 return $this->response->setStatusCode(200)->setJSON(['status' => 'ok']);
@@ -70,10 +82,21 @@ class WebhookController extends BaseController
             }
 
             foreach ($body['entry'] as $entry) {
+                if (!isset($entry['changes']) || !is_array($entry['changes'])) {
+                    log_message('warning', 'Webhook entry missing changes field, skipping');
+                    continue;
+                }
+
                 foreach ($entry['changes'] as $change) {
+                    if (!isset($change['value']) || !is_array($change['value'])) {
+                        log_message('warning', 'Webhook change missing value field, skipping');
+                        continue;
+                    }
+
                     $value = $change['value'];
 
                     if (isset($value['messages'])) {
+                        $messageCount += count($value['messages']);
                         foreach ($value['messages'] as $message) {
                             try {
                                 $this->processInboundMessage(
@@ -110,6 +133,8 @@ class WebhookController extends BaseController
             $success      = false;
             $errorMessage = $e->getMessage();
             log_message('error', 'Webhook processing failed: ' . $e->getMessage());
+        } finally {
+            BaseModel::setBypassAccountScope(false);
         }
 
         // Log this webhook event (only when we know which account it belongs to)
@@ -119,7 +144,10 @@ class WebhookController extends BaseController
                 \Config\Database::connect()->table('webhook_logs')->insert([
                     'account_id'         => $accountId,
                     'event_type'         => $eventType,
-                    'payload'            => $this->request->getBody(),
+                    'payload'            => json_encode([
+                        'entries'       => count($body['entry'] ?? []),
+                        'message_count' => $messageCount,
+                    ]),
                     'status'             => $success ? 'success' : 'failed',
                     'error_message'      => $errorMessage,
                     'processing_time_ms' => $processingMs,
@@ -306,6 +334,22 @@ class WebhookController extends BaseController
             }
         }
 
+        // Handle opt-out (STOP / UNSUBSCRIBE) and opt-in (START / SUBSCRIBE) keywords
+        $inboundText = strtoupper(trim($contentText ?? ''));
+        if (in_array($inboundText, ['STOP', 'UNSUBSCRIBE'], true)) {
+            try {
+                $this->handleOptOut($contact['id'], $accountId);
+            } catch (\Exception $e) {
+                log_message('error', 'Opt-out processing failed: ' . $e->getMessage());
+            }
+        } elseif (in_array($inboundText, ['START', 'SUBSCRIBE'], true)) {
+            try {
+                $this->handleOptIn($contact['id'], $accountId);
+            } catch (\Exception $e) {
+                log_message('error', 'Opt-in processing failed: ' . $e->getMessage());
+            }
+        }
+
         $dispatcher = new JobDispatcher();
         $dispatcher->dispatch('run_automation', [
             'account_id'      => $accountId,
@@ -357,16 +401,21 @@ class WebhookController extends BaseController
         $mediaUrl             = $metaApi->getMediaUrl($mediaId, $accessToken);
         [$localPath, $mime]   = $metaApi->downloadMedia($mediaUrl, $accessToken);
 
-        (new \App\Models\MediaFileModel())->insert([
+        $relativePath = $localPath;
+        if (str_starts_with($relativePath, 'chat-media/')) {
+            $relativePath = substr($relativePath, strlen('chat-media/'));
+        }
+
+        $mediaFileId = (new \App\Models\MediaFileModel())->insert([
             'account_id'        => $accountId,
-            'file_path'         => $localPath,
+            'file_path'         => $relativePath,
             'mime_type'         => $mime,
             'file_size'         => filesize(WRITEPATH . 'uploads/' . $localPath) ?: 0,
             'media_type'        => $this->guessMediaType($localPath),
             'created_at'        => date('Y-m-d H:i:s'),
         ]);
 
-        return [$localPath, $mime, basename($localPath)];
+        return [$mediaFileId, $mime, basename($localPath)];
     }
 
     private function guessMediaType(string $path): string
@@ -739,6 +788,48 @@ class WebhookController extends BaseController
         $template = (new MessageTemplateModel())->where('meta_template_id', $metaTemplateId)->first();
         if ($template) {
             (new MessageTemplateModel())->update($template['id'], ['status' => $event['event']]);
+        }
+    }
+
+    private function handleOptOut(string $contactId, string $accountId): void
+    {
+        $tagId = BroadcastAudience::unsubscribedTagId($accountId);
+
+        if (!$tagId) {
+            $tagId = (new TagModel())->insert([
+                'account_id' => $accountId,
+                'name'       => 'Unsubscribed',
+                'color'      => '#ef4444',
+            ]);
+        }
+
+        $contactTagModel = new ContactTagModel();
+        $exists = $contactTagModel
+            ->where('contact_id', $contactId)
+            ->where('tag_id', $tagId)
+            ->first();
+
+        if (!$exists) {
+            $contactTagModel->insert([
+                'contact_id' => $contactId,
+                'tag_id'     => $tagId,
+            ]);
+        }
+
+        log_message('info', "Contact {$contactId} has been successfully unsubscribed.");
+    }
+
+    private function handleOptIn(string $contactId, string $accountId): void
+    {
+        $tagId = BroadcastAudience::unsubscribedTagId($accountId);
+
+        if ($tagId) {
+            (new ContactTagModel())
+                ->where('contact_id', $contactId)
+                ->where('tag_id', $tagId)
+                ->delete();
+
+            log_message('info', "Contact {$contactId} has opted back in (unsubscribed tag removed).");
         }
     }
 }

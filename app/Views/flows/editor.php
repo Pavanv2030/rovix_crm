@@ -98,6 +98,8 @@ $flowId       = $flow['id']         ?? '';
 $flowName     = $flow['name']       ?? '';
 $flowActive   = $flow['is_active']  ?? 1;
 $rawKeywords  = json_decode($flow['trigger_keywords'] ?? '[]', true) ?? [];
+$triggerType  = $flow['trigger_type'] ?? 'keyword';
+$aiIntentDesc = $flow['ai_intent_description'] ?? '';
 $isEdit       = !empty($flowId);
 $saveUrl      = $isEdit ? base_url('flows/' . $flowId) : base_url('flows');
 ?>
@@ -133,10 +135,23 @@ $saveUrl      = $isEdit ? base_url('flows/' . $flowId) : base_url('flows');
                    class="flex-1 text-base font-semibold border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400">
 
             <div class="flex items-center gap-2 ml-2">
-                <span class="text-xs text-gray-500">Keywords:</span>
+                <span class="text-xs text-gray-500">Trigger:</span>
+                <select id="trigger-type" class="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-400">
+                    <option value="keyword" <?= $triggerType === 'keyword' ? 'selected' : '' ?>>Keywords</option>
+                    <option value="ai_intent" <?= $triggerType === 'ai_intent' ? 'selected' : '' ?>>AI Intent</option>
+                </select>
+            </div>
+
+            <div id="keyword-section" class="flex items-center gap-2" style="display: <?= $triggerType === 'keyword' ? 'flex' : 'none' ?>">
                 <div id="kw-tags" class="flex items-center flex-wrap gap-1"></div>
                 <input type="text" id="kw-input" placeholder="Add keyword + Enter"
                        class="text-xs border border-gray-200 rounded-lg px-2 py-1 w-36 focus:outline-none focus:border-blue-400">
+            </div>
+
+            <div id="ai-intent-section" class="flex items-center gap-2" style="display: <?= $triggerType === 'ai_intent' ? 'flex' : 'none' ?>">
+                <input type="text" id="ai-intent-desc" value="<?= esc($aiIntentDesc) ?>"
+                       placeholder="Describe intent (e.g., customer wants to book appointment)"
+                       class="text-xs border border-gray-200 rounded-lg px-3 py-1 w-96 focus:outline-none focus:border-blue-400">
             </div>
 
             <label class="flex items-center gap-2 text-sm cursor-pointer ml-2">
@@ -193,8 +208,11 @@ const SAVE_URL    = <?= json_encode($saveUrl, JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HE
 const IS_EDIT     = <?= $isEdit ? 'true' : 'false' ?>;
 const INIT_DATA   = <?= $drawflowData ? json_encode($drawflowData, JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) : 'null' ?>;
 const NODE_SCHEMAS = <?= json_encode($nodeSchemas, JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
-const FLOW_TAGS    = <?= json_encode($tags   ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
-const FLOW_AGENTS  = <?= json_encode($agents ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const FLOW_TAGS    = <?= json_encode($tags      ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const FLOW_AGENTS  = <?= json_encode($agents    ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const FLOW_CATALOGS = <?= json_encode($catalogs ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const FLOW_TEMPLATES = <?= json_encode($templates ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
+const FLOW_FLOWS   = <?= json_encode($flows     ?? [], JSON_HEX_TAG|JSON_HEX_QUOT|JSON_HEX_AMP) ?>;
 
 let editor;
 let selectedNodeId = null;
@@ -256,6 +274,13 @@ let keywords = <?= json_encode($rawKeywords) ?>;
             }
             e.target.value = '';
         }
+    });
+
+    // Trigger type toggle
+    document.getElementById('trigger-type').addEventListener('change', e => {
+        const isKeyword = e.target.value === 'keyword';
+        document.getElementById('keyword-section').style.display = isKeyword ? 'flex' : 'none';
+        document.getElementById('ai-intent-section').style.display = isKeyword ? 'none' : 'flex';
     });
 
     // Save button
@@ -325,11 +350,19 @@ function getPreviewText(type, config) {
     if (type === 'send_buttons')  return esc(config.body_text    || '');
     if (type === 'collect_input') return esc(config.prompt_text  || '');
     if (type === 'send_media')    return esc(config.media_url    || '');
-    if (type === 'condition')     return esc(config.condition_type || '');
+    if (type === 'condition') {
+        if (config.condition_type === 'ai_decision') {
+            return 'AI: ' + esc((config.ai_prompt || '').substring(0, 30));
+        }
+        return esc(config.condition_type || '');
+    }
     if (type === 'set_tag')       return esc((config.action || 'add') + ' tag');
     if (type === 'handoff')       return 'Handoff to agent';
     if (type === 'end')           return 'End of flow';
     if (type === 'http_request')  return esc((config.method || 'GET') + ' ' + (config.url || ''));
+    if (type === 'trigger_flow')  return 'Trigger: ' + esc(config.target_flow_id || 'none');
+    if (type === 'send_template')  return 'Template: ' + esc(config.template_id || 'none');
+    if (type === 'appointment_booking') return 'Collect appointment details';
     return '';
 }
 
@@ -407,6 +440,31 @@ function openConfig(nodeId) {
 function closeConfig() {
     selectedNodeId = null;
     document.getElementById('config-panel').style.cssText = 'display:none !important;';
+}
+
+function buildSelectField(field, val, wrap, list, valueFn, labelFn, placeholder, emptyHint) {
+    const sel = document.createElement('select');
+    sel.id = 'cfg_' + field.name;
+    sel.className = 'cfg-input';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = placeholder;
+    sel.appendChild(none);
+    for (const item of list) {
+        const o = document.createElement('option');
+        const v = valueFn(item);
+        o.value = v;
+        o.textContent = labelFn(item);
+        if (String(val) === String(v)) o.selected = true;
+        sel.appendChild(o);
+    }
+    wrap.appendChild(sel);
+    if (!list.length && emptyHint) {
+        const hint = document.createElement('p');
+        hint.className = 'text-xs text-amber-600 mt-1';
+        hint.textContent = emptyHint;
+        wrap.appendChild(hint);
+    }
 }
 
 function renderField(field, config) {
@@ -494,6 +552,15 @@ function renderField(field, config) {
             sel.appendChild(o);
         }
         wrap.appendChild(sel);
+    } else if (field.type === 'catalog_select') {
+        buildSelectField(field, val, wrap, FLOW_CATALOGS, c => c.catalog_id || c.id, c => c.name || c.catalog_id || c.id,
+            '— Default catalog —', 'No catalogs configured. Connect WhatsApp Business catalog first.');
+    } else if (field.type === 'template_select') {
+        buildSelectField(field, val, wrap, FLOW_TEMPLATES, t => t.id, t => t.name,
+            '— Select template —', 'No approved templates yet. Create and submit for Meta approval first.');
+    } else if (field.type === 'flow_select') {
+        buildSelectField(field, val, wrap, FLOW_FLOWS, f => f.id, f => f.name,
+            '— Select flow —', 'No active flows available.');
     } else if (field.type === 'node_select') {
         // Show a dropdown of current canvas nodes
         const sel = document.createElement('select');
@@ -841,7 +908,21 @@ function updateNodeCount() {
 async function saveFlow() {
     const name = document.getElementById('flow-name').value.trim();
     if (!name) { alert('Please enter a flow name.'); return; }
-    if (!keywords.length) { alert('Add at least one trigger keyword.'); return; }
+
+    const triggerType = document.getElementById('trigger-type').value;
+
+    if (triggerType === 'keyword' && !keywords.length) {
+        alert('Add at least one trigger keyword.');
+        return;
+    }
+
+    if (triggerType === 'ai_intent') {
+        const aiIntentDesc = document.getElementById('ai-intent-desc').value.trim();
+        if (!aiIntentDesc) {
+            alert('Please describe the AI intent for this flow.');
+            return;
+        }
+    }
 
     const flowData = editor.export();
     const nodeCount = Object.keys(flowData.drawflow.Home.data || {}).length;
@@ -852,18 +933,26 @@ async function saveFlow() {
     btn.textContent = 'Saving…';
 
     try {
+        const payload = {
+            name,
+            is_active: document.getElementById('flow-active').checked ? 1 : 0,
+            trigger_type: triggerType,
+            flow_data: flowData,
+        };
+
+        if (triggerType === 'keyword') {
+            payload.trigger_keywords = keywords;
+        } else {
+            payload.ai_intent_description = document.getElementById('ai-intent-desc').value.trim();
+        }
+
         const res = await fetch(SAVE_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-Requested-With': 'XMLHttpRequest',
             },
-            body: JSON.stringify({
-                name,
-                is_active:        document.getElementById('flow-active').checked ? 1 : 0,
-                trigger_keywords: keywords,
-                flow_data:        flowData,
-            }),
+            body: JSON.stringify(payload),
         });
 
         const data = await res.json();

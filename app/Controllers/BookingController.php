@@ -55,6 +55,18 @@ class BookingController extends Controller
             return $this->response->setStatusCode(404)->setJSON(['error' => 'Booking not found']);
         }
 
+        if (in_array($appointment['status'] ?? '', ['cancelled', 'completed'], true)) {
+            return $this->response->setStatusCode(400)->setJSON(['error' => 'This booking can no longer be rescheduled.']);
+        }
+
+        $cache = \Config\Services::cache();
+        $rateKey = 'booking_reschedule_' . md5($token);
+        $attempts = (int) $cache->get($rateKey);
+        if ($attempts >= 3) {
+            return $this->response->setStatusCode(429)->setJSON(['error' => 'Too many reschedule attempts. Try again later.']);
+        }
+        $cache->save($rateKey, $attempts + 1, 3600);
+
         $result = AppointmentRescheduler::send($appointment);
 
         return $this->response->setStatusCode($result['success'] ? 200 : 400)->setJSON($result);

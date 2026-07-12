@@ -349,8 +349,11 @@ class AppointmentsController extends BaseController
             return redirect()->to('appointments/types')->with('error', 'Google OAuth not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env');
         }
 
+        $state = bin2hex(random_bytes(16));
+        session()->set('google_oauth_state', $state);
+
         $redirectUri = base_url('appointments/google/callback');
-        $authUrl     = (new GoogleCalendar())->getAuthUrl($redirectUri);
+        $authUrl     = (new GoogleCalendar())->getAuthUrl($redirectUri, $state);
         return redirect()->to($authUrl);
     }
 
@@ -358,9 +361,17 @@ class AppointmentsController extends BaseController
     {
         $code  = $this->request->getGet('code');
         $error = $this->request->getGet('error');
+        $state = $this->request->getGet('state');
+        $expectedState = session('google_oauth_state');
+
+        session()->remove('google_oauth_state');
 
         if ($error || !$code) {
             return redirect()->to('appointments/types')->with('error', 'Google OAuth cancelled or failed.');
+        }
+
+        if (!$expectedState || !$state || !hash_equals($expectedState, $state)) {
+            return redirect()->to('appointments/types')->with('error', 'Google OAuth state mismatch. Please try again.');
         }
 
         try {

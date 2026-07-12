@@ -89,9 +89,16 @@ window.__conversations = <?= json_encode($conversations, JSON_HEX_TAG | JSON_HEX
                             <span class="text-[15px] text-[#111b21] truncate"
                                   :class="conv.unread_count > 0 ? 'font-semibold' : ''"
                                   x-text="conv.contact_name || conv.phone"></span>
-                            <span class="text-xs ml-2 flex-shrink-0"
-                                  :class="conv.unread_count > 0 ? 'text-[#25d366] font-medium' : 'text-[#667781]'"
-                                  x-text="conv.last_message_at ? conv.last_message_at.substring(11, 16) : ''"></span>
+                            <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
+                                <!-- Lead Status Dot -->
+                                <span x-show="conv.lead_status_color"
+                                      class="w-2 h-2 rounded-full flex-shrink-0"
+                                      :style="'background-color: ' + (conv.lead_status_color || '#ccc')"
+                                      :title="conv.lead_status_name || 'Lead Status'"></span>
+                                <span class="text-xs"
+                                      :class="conv.unread_count > 0 ? 'text-[#25d366] font-medium' : 'text-[#667781]'"
+                                      x-text="conv.last_message_at ? conv.last_message_at.substring(11, 16) : ''"></span>
+                            </div>
                         </div>
                         <div class="flex items-center justify-between mt-0.5">
                             <span class="text-[13px] text-[#667781] truncate"
@@ -197,7 +204,7 @@ function refreshAllTimers() {
 // another interval on top of the previous one — clear before restarting.
 if (window.__inboxTimerPoll) clearInterval(window.__inboxTimerPoll);
 refreshAllTimers();
-window.__inboxTimerPoll = setInterval(refreshAllTimers, 1000);
+window.__inboxTimerPoll = setInterval(refreshAllTimers, 3000);
 
 // Re-run after Alpine finishes rendering (x-for creates elements asynchronously)
 document.addEventListener('alpine:initialized', () => setTimeout(refreshAllTimers, 100));
@@ -216,7 +223,7 @@ document.addEventListener('alpine:initialized', () => setTimeout(refreshAllTimer
             if (!el || !window.Alpine) { clearInterval(window.__inboxListPoll); return; }
             window.Alpine.$data(el).conversations = data;
         } catch (e) { /* network hiccup, retry next tick */ }
-    }, 4000);
+    }, 8000);
 })();
 </script>
 

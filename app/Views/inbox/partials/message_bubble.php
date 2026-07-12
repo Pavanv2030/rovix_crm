@@ -7,6 +7,7 @@ $translateLanguages = [
 ];
 $isCustomer = $msg['sender_type'] === 'customer';
 $isSystem   = $msg['sender_type'] === 'system';
+$canReact   = $isCustomer;
 $quotePreview = function (array $q): string {
     return match ($q['content_type']) {
         'image'    => '📷 Photo' . ($q['content_text'] ? ': ' . mb_strimwidth($q['content_text'], 0, 40, '...') : ''),
@@ -52,15 +53,21 @@ $quotePreview = function (array $q): string {
             } catch (e) { this.translated = 'Network error'; }
             this.translating = false;
         }
-    }" @mouseenter="showReact = true" @mouseleave="showReact = false">
-        <div class="wa-react-trigger" x-show="showReact" x-cloak @click.stop="showReact = 'pick'">
+    }" <?= $canReact ? '@mouseenter="showReact = showReact === \'pick\' ? \'pick\' : true" @mouseleave="if (showReact !== \'pick\') showReact = false"' : '' ?>>
+        <?php if ($canReact): ?>
+        <div class="wa-react-trigger" x-show="showReact" x-cloak @click.stop="showReact = showReact === 'pick' ? false : 'pick'">
             <?= rx_icon('smile', 'w-3.5 h-3.5') ?>
         </div>
         <div class="wa-react-picker" x-show="showReact === 'pick'" x-cloak @click.away="showReact = false">
             <?php foreach (['👍', '❤️', '😂', '😮', '😢', '🙏'] as $emoji): ?>
-            <span @click="reactToMessage('<?= esc($msg['id']) ?>', '<?= $emoji ?>')"><?= $emoji ?></span>
+            <button type="button"
+                    class="wa-react-emoji"
+                    data-message-id="<?= esc($msg['id'], 'attr') ?>"
+                    data-emoji="<?= esc($emoji, 'attr') ?>"
+                    @click.stop="window.inboxReactToMessage?.($el.dataset.messageId, $el.dataset.emoji)"><?= $emoji ?></button>
             <?php endforeach; ?>
         </div>
+        <?php endif; ?>
         <?php if (!empty($msg['quoted'])): ?>
         <div class="wa-quote">
             <div class="wa-quote-sender"><?= $msg['quoted']['sender_type'] === 'customer' ? esc($contact['name'] ?? 'Contact') : 'You' ?></div>
@@ -97,15 +104,7 @@ $quotePreview = function (array $q): string {
 
 <?php else: ?>
 <div class="flex justify-end group/msg" data-msg-id="<?= esc($msg['id']) ?>">
-    <div class="wa-bubble wa-out" x-data="{ showReact: false }" @mouseenter="showReact = true" @mouseleave="showReact = false">
-        <div class="wa-react-trigger" x-show="showReact" x-cloak @click.stop="showReact = 'pick'">
-            <?= rx_icon('smile', 'w-3.5 h-3.5') ?>
-        </div>
-        <div class="wa-react-picker" x-show="showReact === 'pick'" x-cloak @click.away="showReact = false">
-            <?php foreach (['👍', '❤️', '😂', '😮', '😢', '🙏'] as $emoji): ?>
-            <span @click="reactToMessage('<?= esc($msg['id']) ?>', '<?= $emoji ?>')"><?= $emoji ?></span>
-            <?php endforeach; ?>
-        </div>
+    <div class="wa-bubble wa-out">
         <?php if (!empty($msg['quoted'])): ?>
         <div class="wa-quote">
             <div class="wa-quote-sender"><?= $msg['quoted']['sender_type'] === 'customer' ? esc($contact['name'] ?? 'Contact') : 'You' ?></div>

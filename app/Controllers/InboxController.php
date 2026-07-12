@@ -19,9 +19,10 @@ class InboxController extends BaseController
         $selectedStatus    = $this->request->getGet('status') ?? 'all';
 
         $builder = $conversationModel->db->table('conversations c')
-            ->select('c.*, ct.name as contact_name, ct.phone, ct.phone_normalized, ct.avatar_url as contact_avatar, p.full_name as assigned_agent_name')
+            ->select('c.*, ct.name as contact_name, ct.phone, ct.phone_normalized, ct.avatar_url as contact_avatar, p.full_name as assigned_agent_name, cs.name as lead_status_name, cs.color as lead_status_color')
             ->join('contacts ct', 'ct.id = c.contact_id', 'left')
             ->join('profiles p', 'p.user_id = c.assigned_agent_id', 'left')
+            ->join('conversation_statuses cs', 'cs.id = c.lead_status_id', 'left')
             ->where('c.account_id', session('account_id'))
             ->orderBy('c.last_message_at', 'DESC');
 

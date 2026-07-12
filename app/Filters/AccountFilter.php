@@ -13,6 +13,8 @@ class AccountFilter implements FilterInterface
         'login',
         'signup',
         'forgot-password',
+        'reset-password',
+        'media/template',
         'api/whatsapp/webhook',
         'join',
     ];
@@ -39,6 +41,11 @@ class AccountFilter implements FilterInterface
         if (!$profile) {
             session()->destroy();
             return redirect()->to(base_url('login'));
+        }
+
+        if (empty($profile['is_active'])) {
+            session()->destroy();
+            return redirect()->to(base_url('login'))->with('error', 'Your account has been deactivated. Contact an admin.');
         }
 
         session()->set([

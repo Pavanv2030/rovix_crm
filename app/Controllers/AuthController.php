@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Models\AccountModel;
+use App\Models\PasswordResetModel;
 use App\Models\ProfileModel;
 
 class AuthController extends BaseController
@@ -30,15 +31,43 @@ class AuthController extends BaseController
         $email    = strtolower(trim($this->request->getPost('email')));
         $password = $this->request->getPost('password');
 
+        // Check if account is locked due to failed attempts
+        $cache = \Config\Services::cache();
+        $lockKey = 'login_lock_' . md5($email);
+        $attemptsKey = 'login_attempts_' . md5($email);
+
+        if ($cache->get($lockKey)) {
+            session()->setFlashdata('error', 'Account temporarily locked. Try again in 15 minutes.');
+            return redirect()->to(base_url('login'));
+        }
+
         $profileModel = new ProfileModel();
         ProfileModel::setBypassAccountScope(true);
         $profile = $profileModel->where('LOWER(email)', $email)->first();
         ProfileModel::setBypassAccountScope(false);
 
-        if (!$profile || !password_verify($password, $profile['password_hash'])) {
-            session()->setFlashdata('error', 'Invalid email or password.');
+        // Always verify against a hash, even if user doesn't exist (prevents timing attack)
+        $hashToVerify = $profile['password_hash'] ?? password_hash('dummy_password_for_timing', PASSWORD_BCRYPT);
+        $valid = password_verify($password, $hashToVerify);
+
+        if (!$profile || !$valid) {
+            // Increment failed attempts
+            $attempts = (int)$cache->get($attemptsKey) + 1;
+            $cache->save($attemptsKey, $attempts, 900); // 15 minutes
+
+            if ($attempts >= 5) {
+                $cache->save($lockKey, true, 900); // Lock for 15 minutes
+                log_message('warning', "Account locked due to failed login attempts: {$email}");
+                session()->setFlashdata('error', 'Too many failed attempts. Account locked for 15 minutes.');
+            } else {
+                session()->setFlashdata('error', 'Invalid email or password.');
+            }
             return redirect()->to(base_url('login'));
         }
+
+        // Successful login - clear failed attempts
+        $cache->delete($attemptsKey);
+        $cache->delete($lockKey);
 
         $this->setSession($profile);
         return redirect()->to(base_url('dashboard'));
@@ -120,6 +149,78 @@ class AuthController extends BaseController
         return view('auth/forgot_password', ['pageTitle' => 'Forgot Password']);
     }
 
+    public function sendPasswordReset()
+    {
+        $email = strtolower(trim($this->request->getPost('email') ?? ''));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            session()->setFlashdata('error', 'Please enter a valid email address.');
+            return redirect()->to(base_url('forgot-password'));
+        }
+
+        ProfileModel::setBypassAccountScope(true);
+        $profile = (new ProfileModel())->where('LOWER(email)', $email)->first();
+        ProfileModel::setBypassAccountScope(false);
+
+        if ($profile) {
+            $token   = bin2hex(random_bytes(32));
+            $resetId = generate_uuid();
+
+            (new PasswordResetModel())->insert([
+                'id'         => $resetId,
+                'profile_id' => $profile['id'],
+                'token_hash' => hash('sha256', $token),
+                'expires_at' => date('Y-m-d H:i:s', strtotime('+1 hour')),
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->sendPasswordResetEmail($email, $token);
+        }
+
+        session()->setFlashdata('success', 'If an account exists for that email, a reset link has been sent.');
+        return redirect()->to(base_url('login'));
+    }
+
+    public function resetPasswordForm(string $token)
+    {
+        if (!$this->findValidPasswordReset($token)) {
+            return redirect()->to(base_url('login'))->with('error', 'Invalid or expired reset link.');
+        }
+
+        return view('auth/reset_password', [
+            'pageTitle' => 'Reset Password',
+            'token'     => $token,
+        ]);
+    }
+
+    public function resetPassword(string $token)
+    {
+        $reset = $this->findValidPasswordReset($token);
+        if (!$reset) {
+            return redirect()->to(base_url('login'))->with('error', 'Invalid or expired reset link.');
+        }
+
+        $rules = [
+            'password'         => 'required|min_length[8]',
+            'password_confirm' => 'required|matches[password]',
+        ];
+
+        if (!$this->validate($rules)) {
+            return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
+        }
+
+        ProfileModel::setBypassAccountScope(true);
+        $profileModel = new ProfileModel();
+        $profileModel->update($reset['profile_id'], [
+            'password_hash' => password_hash($this->request->getPost('password'), PASSWORD_BCRYPT),
+        ]);
+        ProfileModel::setBypassAccountScope(false);
+
+        (new PasswordResetModel())->update($reset['id'], ['used_at' => date('Y-m-d H:i:s')]);
+
+        session()->setFlashdata('success', 'Password updated. You can sign in now.');
+        return redirect()->to(base_url('login'));
+    }
+
     public function logout()
     {
         // session()->destroy() calls session_destroy() immediately, which
@@ -133,6 +234,35 @@ class AuthController extends BaseController
         session_regenerate_id(true);
         session()->setFlashdata('success', "You've been logged out.");
         return redirect()->to(base_url('login'));
+    }
+
+    private function findValidPasswordReset(string $token): ?array
+    {
+        $reset = (new PasswordResetModel())
+            ->where('token_hash', hash('sha256', $token))
+            ->where('used_at IS NULL')
+            ->where('expires_at >', date('Y-m-d H:i:s'))
+            ->first();
+
+        return $reset ?: null;
+    }
+
+    private function sendPasswordResetEmail(string $email, string $token): void
+    {
+        $link = base_url('reset-password/' . $token);
+
+        try {
+            $emailService = \Config\Services::email();
+            $emailService->setTo($email);
+            $emailService->setSubject('Reset your Rovix CRM password');
+            $emailService->setMessage(
+                '<p>Click the link below to reset your password. This link expires in 1 hour.</p>'
+                . '<p><a href="' . esc($link) . '">' . esc($link) . '</a></p>'
+            );
+            $emailService->send();
+        } catch (\Throwable $e) {
+            log_message('error', 'Password reset email failed: ' . $e->getMessage());
+        }
     }
 
     private function setSession(array $profile): void

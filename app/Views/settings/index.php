@@ -117,8 +117,9 @@ $currentTz = $account['timezone'] ?? 'UTC';
             <label class="block text-sm font-medium text-gray-700 mb-1">WhatsApp Business Account ID</label>
             <input type="text" name="waba_id" required
                    value="<?= esc($waConfig['waba_id'] ?? '') ?>"
-                   placeholder="WABA ID"
+                   placeholder="e.g. 10234370554755"
                    class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+            <p class="text-xs text-gray-400 mt-1">WhatsApp Business Account ID — not the same as Phone Number ID above.</p>
         </div>
 
         <div class="mb-4">
@@ -254,12 +255,12 @@ async function fetchNumberInfo() {
 
     try {
         const res  = await fetch('<?= base_url('settings/fetch-number-info') ?>', { method: 'POST', body: fd });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
 
-        if (data.error) {
-            errEl.textContent = data.error;
+        if (!res.ok || data.error) {
+            errEl.textContent = data.error || ('Request failed (' + res.status + '). Check access token and Phone Number ID.');
             errEl.classList.remove('hidden');
-        } else {
+        } else if (data.success) {
             // Update table cells without reload
             const ratingColors = { GREEN: 'bg-green-500', YELLOW: 'bg-yellow-400', RED: 'bg-red-500' };
             const rating = data.quality_rating ?? 'UNKNOWN';
@@ -351,23 +352,55 @@ async function fetchNumberInfo() {
         </div>
 
         <div class="mt-6 pt-5 border-t border-gray-100">
-            <h3 class="text-sm font-semibold text-gray-800 mb-1">Daily Report</h3>
-            <p class="text-xs text-gray-400 mb-4">Sent automatically every day to the numbers below. Uses an Approved Template — founder/HR won't have an open WhatsApp session with your number, so a plain text message would get rejected by Meta most days. Leave both numbers blank to disable.</p>
-
-            <div class="mb-4">
-                <label class="block text-sm font-medium text-gray-700 mb-1">Founder WhatsApp Number</label>
-                <input type="text" name="daily_report_founder_number"
-                       value="<?= esc($notifPrefs['daily_report_founder_number'] ?? '') ?>"
-                       placeholder="+91 98765 43210"
-                       class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <h3 class="text-sm font-semibold text-gray-800 mb-1">Daily Executive Report</h3>
+                    <p class="text-xs text-gray-400">Professional performance summary sent daily to your founder and HR. Email delivers the full report; WhatsApp sends a concise executive brief via an approved template.</p>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                    <a href="<?= base_url('settings/daily-report-preview?role=founder') ?>" target="_blank"
+                       class="px-3 py-1.5 text-xs font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100">
+                        Preview (Founder)
+                    </a>
+                    <a href="<?= base_url('settings/daily-report-preview?role=hr') ?>" target="_blank"
+                       class="px-3 py-1.5 text-xs font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100">
+                        Preview (HR)
+                    </a>
+                </div>
             </div>
 
-            <div class="mb-4">
-                <label class="block text-sm font-medium text-gray-700 mb-1">HR WhatsApp Number</label>
-                <input type="text" name="daily_report_hr_number"
-                       value="<?= esc($notifPrefs['daily_report_hr_number'] ?? '') ?>"
-                       placeholder="+91 98765 43210"
-                       class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Founder WhatsApp Number</label>
+                    <input type="text" name="daily_report_founder_number"
+                           value="<?= esc($notifPrefs['daily_report_founder_number'] ?? '') ?>"
+                           placeholder="+91 98765 43210"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Founder Email</label>
+                    <input type="email" name="daily_report_founder_email"
+                           value="<?= esc($notifPrefs['daily_report_founder_email'] ?? '') ?>"
+                           placeholder="founder@company.com"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">HR WhatsApp Number</label>
+                    <input type="text" name="daily_report_hr_number"
+                           value="<?= esc($notifPrefs['daily_report_hr_number'] ?? '') ?>"
+                           placeholder="+91 98765 43210"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">HR Email</label>
+                    <input type="email" name="daily_report_hr_email"
+                           value="<?= esc($notifPrefs['daily_report_hr_email'] ?? '') ?>"
+                           placeholder="hr@company.com"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-400">
+                </div>
             </div>
 
             <div class="mb-4">
@@ -388,8 +421,28 @@ async function fetchNumberInfo() {
                     <?php endforeach; ?>
                 </select>
                 <?php if (empty($templates)): ?>
-                <p class="text-xs text-amber-600 mt-1">No approved templates yet — create one under Templates first (5 numbered placeholders: date, new leads, messages sent, messages received, appointments booked).</p>
+                <p class="text-xs text-amber-600 mt-1">No approved templates yet — create one under Templates first.</p>
                 <?php endif; ?>
+                <div class="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p class="text-xs font-semibold text-slate-700 mb-2">Recommended WhatsApp template body (submit to Meta for approval):</p>
+                    <pre class="text-xs text-slate-600 whitespace-pre-wrap font-mono leading-relaxed">*Daily Executive Brief*
+{{1}}
+
+*Team Summary*
+{{2}}
+
+*Activity*
+{{3}}
+
+*Pipeline*
+{{4}}
+
+*Highlight*
+{{5}}
+
+_Full report delivered to your email._</pre>
+                    <p class="text-xs text-slate-400 mt-2">Variables: date · team reached/reps/hours · messages &amp; leads · hot leads/follow-ups · top performer</p>
+                </div>
             </div>
         </div>
 

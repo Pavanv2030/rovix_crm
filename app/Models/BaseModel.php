@@ -18,6 +18,22 @@ class BaseModel extends \CodeIgniter\Model
         static::$bypassAccountScope = $bypass;
     }
 
+    /**
+     * Run a callable with account scoping bypassed, guaranteeing the
+     * bypass flag is reset afterwards even if the callable throws.
+     *
+     * @return mixed The callable's return value.
+     */
+    public static function runUnscoped(callable $fn)
+    {
+        static::setBypassAccountScope(true);
+        try {
+            return $fn();
+        } finally {
+            static::setBypassAccountScope(false);
+        }
+    }
+
     protected function initialize(): void
     {
         parent::initialize();

@@ -126,10 +126,12 @@ class MetaApi
         ], $accessToken);
     }
 
-    public function sendReaction(string $phoneNumberId, string $accessToken, string $messageId, string $emoji): array
+    public function sendReaction(string $phoneNumberId, string $accessToken, string $to, string $messageId, string $emoji): array
     {
         return $this->callApi('POST', "{$phoneNumberId}/messages", [
             'messaging_product' => 'whatsapp',
+            'recipient_type'    => 'individual',
+            'to'                => $to,
             'type'              => 'reaction',
             'reaction'          => ['message_id' => $messageId, 'emoji' => $emoji],
         ], $accessToken);
@@ -329,12 +331,23 @@ class MetaApi
 
     public function getCatalogProducts(string $catalogId, string $accessToken): array
     {
-        return $this->callApi(
+        $result = $this->callApi(
             'GET',
             "{$catalogId}/products?fields=id,name,description,price,sale_price,image_url,availability,retailer_id&limit=100",
             null,
             $accessToken
         );
+
+        // Meta Commerce Manager shows "Content ID" but API may return empty retailer_id.
+        // Use id as fallback so product sends don't fail with 131009.
+        foreach ($result['data'] ?? [] as &$product) {
+            if (empty($product['retailer_id'])) {
+                log_message('info', "Product {$product['id']} missing retailer_id, using id as fallback");
+                $product['retailer_id'] = $product['id'];
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -360,6 +373,8 @@ class MetaApi
         $result = json_decode($response->getBody(), true) ?? [];
         if ($response->getStatusCode() >= 400) {
             $msg = $result['error']['message'] ?? ('HTTP ' . $response->getStatusCode());
+            $details = json_encode($result);
+            log_message('error', "enableCommerceSettings API response: {$details}");
             throw new \Exception("Failed to enable commerce settings: {$msg}");
         }
 
@@ -368,7 +383,18 @@ class MetaApi
 
     public function getPhoneNumberInfo(string $phoneNumberId, string $accessToken): array
     {
-        return $this->callApi('GET', "{$phoneNumberId}?fields=display_phone_number,verified_name", null, $accessToken);
+        // account_mode is NOT a valid field on the phone-number node (causes Meta HTTP 400).
+        $fields = implode(',', [
+            'display_phone_number',
+            'verified_name',
+            'quality_rating',
+            'name_status',
+            'platform_type',
+            'code_verification_status',
+            'status',
+        ]);
+
+        return $this->callApi('GET', "{$phoneNumberId}?fields={$fields}", null, $accessToken);
     }
 
     /**
@@ -667,5 +693,104 @@ class MetaApi
             'type'              => 'interactive',
             'interactive'       => $interactive,
         ], $accessToken);
+    }
+
+    /**
+     * Resolve the WhatsApp Business Account ID for the connected phone number.
+     * Uses debug_token granular scopes, then verifies via WABA phone_numbers edge.
+     */
+    public function resolveWabaId(string $phoneNumberId, string $accessToken, ?string $hintWabaId = null): string
+    {
+        $hintWabaId = trim((string) $hintWabaId);
+        if ($hintWabaId !== '' && $hintWabaId !== $phoneNumberId
+            && $this->wabaOwnsPhoneNumber($hintWabaId, $phoneNumberId, $accessToken)) {
+            return $hintWabaId;
+        }
+
+        $candidates = $this->wabaIdsFromAccessToken($accessToken);
+        foreach ($candidates as $candidate) {
+            if ($this->wabaOwnsPhoneNumber($candidate, $phoneNumberId, $accessToken)) {
+                return $candidate;
+            }
+        }
+
+        if (count($candidates) === 1) {
+            return $candidates[0];
+        }
+
+        throw new \Exception(
+            'Could not resolve WhatsApp Business Account ID. '
+            . 'Open Meta → WhatsApp → API Setup and paste the WhatsApp Business Account ID '
+            . '(not the Phone Number ID) into Settings → WhatsApp.'
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function wabaIdsFromAccessToken(string $accessToken): array
+    {
+        $appId     = env('META_APP_ID');
+        $appSecret = config('WhatsApp')->metaAppSecret ?? env('whatsapp.metaAppSecret', '');
+        if (!$appId || !$appSecret) {
+            return [];
+        }
+
+        $client = \Config\Services::curlrequest(['timeout' => 15, 'http_errors' => false]);
+        $url    = self::BASE_URL . 'debug_token'
+            . '?input_token=' . rawurlencode($accessToken)
+            . '&access_token=' . rawurlencode($appId . '|' . $appSecret);
+
+        $response = $client->get($url);
+        $result   = json_decode($response->getBody(), true) ?? [];
+
+        if ($response->getStatusCode() >= 400 || isset($result['error'])) {
+            log_message('warning', 'debug_token failed: ' . ($response->getBody() ?? ''));
+            return [];
+        }
+
+        $ids = [];
+        foreach ($result['data']['granular_scopes'] ?? [] as $scope) {
+            $name = $scope['scope'] ?? '';
+            if (!in_array($name, ['whatsapp_business_management', 'whatsapp_business_messaging', 'business_management'], true)) {
+                continue;
+            }
+            foreach ($scope['target_ids'] ?? [] as $id) {
+                $ids[] = (string) $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    public function wabaOwnsPhoneNumber(string $wabaId, string $phoneNumberId, string $accessToken): bool
+    {
+        try {
+            $result = $this->callApi('GET', "{$wabaId}/phone_numbers?fields=id&limit=50", null, $accessToken);
+            foreach ($result['data'] ?? [] as $row) {
+                if ((string) ($row['id'] ?? '') === (string) $phoneNumberId) {
+                    return true;
+                }
+            }
+        } catch (\Exception $e) {
+            log_message('warning', "wabaOwnsPhoneNumber check failed for {$wabaId}: " . $e->getMessage());
+        }
+
+        return false;
+    }
+
+    /**
+     * List message templates on a WhatsApp Business Account.
+     *
+     * @see https://developers.facebook.com/docs/graph-api/reference/whats-app-business-account/message_templates/
+     */
+    public function listMessageTemplates(string $wabaId, string $accessToken, ?string $after = null, int $limit = 100): array
+    {
+        $url = "{$wabaId}/message_templates?limit={$limit}";
+        if ($after) {
+            $url .= '&after=' . rawurlencode($after);
+        }
+
+        return $this->callApi('GET', $url, null, $accessToken);
     }
 }

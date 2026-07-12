@@ -15,37 +15,37 @@ class ProcessQueue extends BaseCommand
 
     public function run(array $params)
     {
-        BaseModel::setBypassAccountScope(true);
+        BaseModel::runUnscoped(function () {
+            $model = new JobQueueModel();
 
-        $model = new JobQueueModel();
+            // Unlock stale processing jobs
+            $model->where('status', 'processing')
+                ->where('locked_until <', date('Y-m-d H:i:s'))
+                ->set(['status' => 'pending', 'locked_until' => null])
+                ->update();
 
-        // Unlock stale processing jobs
-        $model->where('status', 'processing')
-            ->where('locked_until <', date('Y-m-d H:i:s'))
-            ->set(['status' => 'pending', 'locked_until' => null])
-            ->update();
+            $jobs = $model->where('status', 'pending')
+                ->groupStart()
+                    ->where('run_after IS NULL')
+                    ->orWhere('run_after <=', date('Y-m-d H:i:s'))
+                ->groupEnd()
+                ->orderBy('priority', 'DESC')
+                ->orderBy('created_at', 'ASC')
+                ->findAll(50);
 
-        $jobs = $model->where('status', 'pending')
-            ->groupStart()
-                ->where('run_after IS NULL')
-                ->orWhere('run_after <=', date('Y-m-d H:i:s'))
-            ->groupEnd()
-            ->orderBy('priority', 'DESC')
-            ->orderBy('created_at', 'ASC')
-            ->findAll(50);
+            if (empty($jobs)) {
+                CLI::write('No pending jobs', 'yellow');
+                return;
+            }
 
-        if (empty($jobs)) {
-            CLI::write('No pending jobs', 'yellow');
-            return;
-        }
+            CLI::write('Processing ' . count($jobs) . ' jobs...', 'green');
 
-        CLI::write('Processing ' . count($jobs) . ' jobs...', 'green');
+            foreach ($jobs as $job) {
+                $this->processJob($job, $model);
+            }
 
-        foreach ($jobs as $job) {
-            $this->processJob($job, $model);
-        }
-
-        CLI::write('Done', 'green');
+            CLI::write('Done', 'green');
+        });
     }
 
     private function processJob(array $job, JobQueueModel $model)

@@ -40,7 +40,7 @@
 
         <form method="POST" action="<?= base_url('team/accept/process') ?>">
             <?= csrf_field() ?>
-            <input type="hidden" name="token" value="<?= esc($invitation['token_hash']) ?>">
+            <input type="hidden" name="token" value="<?= esc($token) ?>">
 
             <!-- Email (read-only) -->
             <div class="mb-4">

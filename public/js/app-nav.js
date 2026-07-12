@@ -126,7 +126,14 @@
     // after an AJAX action (send message, confirm, etc.) — swaps in fresh
     // content the same way link navigation does, no full browser reload.
     window.RovixNav = {
-        refresh: function () { return navigate(window.location.href, false); },
+        refresh: function () {
+            if (inFlight) {
+                return new Promise(function (resolve) {
+                    setTimeout(function () { resolve(window.RovixNav.refresh()); }, 150);
+                });
+            }
+            return navigate(window.location.href, false);
+        },
         to: function (url) { return navigate(url, true); }
     };
 })();

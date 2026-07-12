@@ -21,6 +21,12 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
     translating: false,
     rewriting: false,
     showTranslateMenu: false,
+    showEmojiPicker: false,
+    commonEmojis: ['😀','😃','😄','😁','😅','😂','🤣','😊','😇','🙂','😉','😍','🥰','😘','😋','😎','🤔','😮','😢','😭','😡','👍','👎','👏','🙏','❤️','🔥','✅','⭐','🎉','💯','🙌','💪','🤝','👋','🎂','🎁','☀️','🌙','💡','📌','✨'],
+    insertEmoji(emoji) {
+        this.messageText += emoji;
+        this.$nextTick(() => this.$refs.messageInput?.focus());
+    },
     async translateOutgoing(lang) {
         if (!this.messageText.trim() || this.translating) return;
         this.showTranslateMenu = false;
@@ -55,15 +61,21 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
     async sendMessage() {
         if (!this.messageText.trim()) return;
         this.sending = true;
+        const text = this.messageText;
         const formData = new FormData();
         formData.append('conversation_id', '<?= esc($conversation['id']) ?>');
         formData.append('content_type', 'text');
-        formData.append('content_text', this.messageText);
+        formData.append('content_text', text);
         formData.append('<?= csrf_token() ?>', '<?= csrf_hash() ?>');
         try {
-            const res = await fetch('<?= base_url('api/whatsapp/send') ?>', { method: 'POST', body: formData });
-            if (res.ok) { this.messageText = ''; window.RovixNav.refresh(); }
-            else { alert('Failed to send message'); }
+            const res  = await fetch('<?= base_url('api/whatsapp/send') ?>', { method: 'POST', body: formData });
+            const data = await res.json().catch(() => ({}));
+            if (data.html) window.appendInboxMessage?.(data.html, data.message_id, data.last_at);
+            if (data.success) {
+                this.messageText = '';
+            } else {
+                alert(data.error || 'Failed to send message');
+            }
         } catch(e) { alert('Network error'); }
         this.sending = false;
     },
@@ -97,9 +109,16 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
         fd.append('template_id', this.selectedTemplateId);
         fd.append('<?= csrf_token() ?>', '<?= csrf_hash() ?>');
         try {
-            const res = await fetch('<?= base_url('api/whatsapp/send-template') ?>', { method: 'POST', body: fd });
-            if (res.ok) { this.showTemplateModal = false; this.selectedTemplateId = ''; this.templatePreview = ''; window.RovixNav.refresh(); }
-            else { const d = await res.json(); alert(d.error || 'Failed to send template'); }
+            const res  = await fetch('<?= base_url('api/whatsapp/send-template') ?>', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (data.html) window.appendInboxMessage?.(data.html, data.message_id, data.last_at);
+            if (data.success) {
+                this.showTemplateModal = false;
+                this.selectedTemplateId = '';
+                this.templatePreview = '';
+            } else {
+                alert(data.error || 'Failed to send template');
+            }
         } catch(e) { alert('Network error'); }
         this.sending = false;
     },
@@ -179,18 +198,6 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
             alert('Error: ' + (json.error || 'Failed to send product'));
         } catch(e) { alert('Network error'); }
         this.sending = false;
-    },
-    async reactToMessage(messageId, emoji) {
-        const fd = new FormData();
-        fd.append('message_id', messageId);
-        fd.append('emoji', emoji);
-        fd.append('<?= csrf_token() ?>', '<?= csrf_hash() ?>');
-        try {
-            const res = await fetch('<?= base_url('api/whatsapp/react') ?>', { method: 'POST', body: fd });
-            const d   = await res.json();
-            if (d.success) window.RovixNav.refresh();
-            else alert(d.error || 'Failed to react');
-        } catch(e) { alert('Network error'); }
     }
 }">
 
@@ -456,8 +463,27 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
                 </svg>
             </button>
 
+            <!-- Emoji picker -->
+            <div class="relative flex-shrink-0 mb-0.5" @click.away="showEmojiPicker = false">
+                <button @click="showEmojiPicker = !showEmojiPicker"
+                        title="Insert emoji"
+                        class="p-2 text-[#54656f] hover:bg-[#d9dde0] rounded-full transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z"/>
+                    </svg>
+                </button>
+                <div x-show="showEmojiPicker" x-cloak class="wa-emoji-picker">
+                    <template x-for="emoji in commonEmojis" :key="emoji">
+                        <button type="button"
+                                @click="insertEmoji(emoji); showEmojiPicker = false"
+                                x-text="emoji"></button>
+                    </template>
+                </div>
+            </div>
+
             <!-- Input (white pill on gray bar, WhatsApp style) -->
             <textarea x-model="messageText"
+                      x-ref="messageInput"
                       @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
                       placeholder="Type a message"
                       rows="1"
@@ -560,6 +586,44 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
 </div>
 
 <script>
+    window.__inboxConversationId = <?= json_encode($conversation['id']) ?>;
+
+    window.inboxReactToMessage = async function(messageId, emoji) {
+        if (!messageId || !emoji) return;
+
+        const csrfInput = document.querySelector('input[name="<?= csrf_token() ?>"]');
+        const fd = new FormData();
+        fd.append('message_id', messageId);
+        fd.append('conversation_id', window.__inboxConversationId || '');
+        fd.append('emoji', emoji);
+        if (csrfInput) fd.append(csrfInput.name, csrfInput.value);
+
+        try {
+            const res = await fetch('<?= base_url('api/whatsapp/react') ?>', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!data.success) {
+                alert(data.error || 'Could not add reaction');
+                return;
+            }
+
+            const row = document.querySelector('[data-msg-id="' + messageId + '"]');
+            if (row) {
+                let badge = row.querySelector('.wa-reaction-badge');
+                if (!badge) {
+                    const bubble = row.querySelector('.wa-bubble');
+                    if (bubble) {
+                        badge = document.createElement('div');
+                        badge.className = 'wa-reaction-badge';
+                        bubble.appendChild(badge);
+                    }
+                }
+                if (badge) badge.textContent = emoji;
+            }
+        } catch (e) {
+            alert('Network error — please try again');
+        }
+    };
+
     // Auto-scroll to bottom of thread
     (() => {
         const thread = document.getElementById('message-thread');
@@ -571,35 +635,45 @@ window.__inboxTemplates = <?= json_encode(array_map(fn($t) => ['id' => $t['id'],
     // page refresh. RovixNav swaps #app-shell's innerHTML instead of doing
     // a real page load, so any setInterval from a previous conversation view
     // would otherwise keep running forever — clear it before starting a new one.
+    window.appendInboxMessage = function(html, messageId, lastAt) {
+        const thread = document.getElementById('message-thread');
+        if (!thread || !html) return;
+        if (messageId && thread.querySelector('[data-msg-id="' + messageId + '"]')) return;
+
+        const nearBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 100;
+        thread.insertAdjacentHTML('beforeend', html);
+        if (window.Alpine) window.Alpine.initTree(thread);
+        if (nearBottom) thread.scrollTop = thread.scrollHeight;
+
+        if (window.__inboxMsgPollState) {
+            if (lastAt) window.__inboxMsgPollState.afterAt = lastAt;
+            if (messageId) window.__inboxMsgPollState.afterId = messageId;
+        }
+    };
+
     (() => {
         const conversationId = '<?= esc($conversation['id']) ?>';
         const lastMsg        = <?= json_encode(end($messages) ?: null) ?>;
 
-        let afterAt = lastMsg ? lastMsg.created_at : '1970-01-01 00:00:00';
-        let afterId = lastMsg ? lastMsg.id : '';
+        const state = {
+            afterAt: lastMsg ? lastMsg.created_at : '1970-01-01 00:00:00',
+            afterId: lastMsg ? lastMsg.id : '',
+        };
+        window.__inboxMsgPollState = state;
 
-        if (window.__inboxMsgPoll) clearInterval(window.__inboxMsgPoll);
-
-        window.__inboxMsgPoll = setInterval(async () => {
+        async function pollMessages() {
             try {
                 const url = '<?= base_url('api/inbox/messages') ?>/' + conversationId
-                    + '?after_at=' + encodeURIComponent(afterAt) + '&after_id=' + encodeURIComponent(afterId);
+                    + '?after_at=' + encodeURIComponent(state.afterAt) + '&after_id=' + encodeURIComponent(state.afterId);
                 const res  = await fetch(url);
                 if (!res.ok) return;
                 const data = await res.json();
                 if (!data.html) return;
-
-                const thread  = document.getElementById('message-thread');
-                if (!thread) { clearInterval(window.__inboxMsgPoll); return; }
-
-                const nearBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 100;
-                thread.insertAdjacentHTML('beforeend', data.html);
-                if (window.Alpine) window.Alpine.initTree(thread);
-                if (nearBottom) thread.scrollTop = thread.scrollHeight;
-
-                afterAt = data.last_at;
-                afterId = data.last_id;
+                window.appendInboxMessage(data.html, data.last_id, data.last_at);
             } catch (e) { /* network hiccup, retry next tick */ }
-        }, 4000);
+        }
+
+        if (window.__inboxMsgPoll) clearInterval(window.__inboxMsgPoll);
+        window.__inboxMsgPoll = setInterval(pollMessages, 5000);
     })();
 </script>

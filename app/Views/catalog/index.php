@@ -21,6 +21,11 @@
         </div>
     </div>
 
+    <!-- Hidden CSRF token for JS -->
+    <div style="display:none">
+        <?= csrf_field() ?>
+    </div>
+
     <?php if (empty($waConfig['catalog_id'])): ?>
     <!-- No catalog connected -->
     <div class="bg-white rounded-xl border border-gray-200 p-10 text-center" x-data="{ loading: false, catalogs: [], selected: '' }">
@@ -150,11 +155,21 @@ async function fetchCatalogs(data) {
     }
 }
 
+function csrfForm(extra = {}) {
+    const token = document.querySelector('input[name="csrf_test_name"]').value;
+    const form = new FormData();
+    form.append('csrf_test_name', token);
+    for (const [k, v] of Object.entries(extra)) form.append(k, v);
+    return form;
+}
+
 async function connectCatalog(data) {
     if (!data.selected) return;
-    const form = new FormData();
-    form.append('catalog_id', data.selected);
-    const res  = await fetch('<?= base_url('catalog/connect') ?>', { method: 'POST', body: form });
+    const form = csrfForm({ catalog_id: data.selected });
+    const res  = await fetch('<?= base_url('catalog/connect') ?>', {
+        method: 'POST',
+        body: form
+    });
     const json = await res.json();
     if (json.success) {
         alert('Connected! Found ' + json.product_count + ' products.');
@@ -165,19 +180,31 @@ async function connectCatalog(data) {
 }
 
 async function syncCatalog() {
-    const res  = await fetch('<?= base_url('catalog/sync') ?>', { method: 'POST' });
-    const json = await res.json();
-    if (json.success) {
-        alert('Synced! ' + json.product_count + ' products.');
-        location.reload();
-    } else {
-        alert('Error: ' + json.error);
+    try {
+        const form = csrfForm();
+        const res  = await fetch('<?= base_url('catalog/sync') ?>', {
+            method: 'POST',
+            body: form
+        });
+        const json = await res.json();
+        if (json.success) {
+            alert('Synced! ' + json.product_count + ' products.');
+            location.reload();
+        } else {
+            alert('Error: ' + (json.error || 'Sync failed'));
+        }
+    } catch (err) {
+        alert('Error: ' + (err.message || 'Network or server error'));
     }
 }
 
 function disconnectCatalog() {
     if (!confirm('Disconnect catalog? This will not delete orders.')) return;
-    fetch('<?= base_url('catalog/disconnect') ?>', { method: 'POST' })
+    const form = csrfForm();
+    fetch('<?= base_url('catalog/disconnect') ?>', {
+        method: 'POST',
+        body: form
+    })
         .then(r => r.json())
         .then(json => {
             if (json.success) location.reload();

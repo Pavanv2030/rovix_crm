@@ -73,7 +73,14 @@ class MediaController extends BaseController
             return $this->response->setStatusCode(404)->setBody('File not found');
         }
 
-        $filePath = WRITEPATH . 'uploads/chat-media/' . $media['file_path'];
+        // Prevent path traversal attacks by validating the resolved path
+        $filePath = realpath(WRITEPATH . 'uploads/chat-media/' . $media['file_path']);
+        $baseDir  = realpath(WRITEPATH . 'uploads/chat-media/');
+
+        if (!$filePath || !$baseDir || strpos($filePath, $baseDir) !== 0) {
+            log_message('warning', "Path traversal attempt detected: {$media['file_path']}");
+            return $this->response->setStatusCode(403)->setBody('Invalid file path');
+        }
 
         if (!file_exists($filePath)) {
             return $this->response->setStatusCode(404)->setBody('File not found on disk');

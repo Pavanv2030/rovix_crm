@@ -54,17 +54,49 @@ class TemplatesController extends BaseController
             return $this->response->setJSON(['error' => 'Image must be under 5 MB.']);
         }
 
-        $dir = FCPATH . 'uploads/template-media/';
+        $finfo    = finfo_open(FILEINFO_MIME_TYPE);
+        $realMime = finfo_file($finfo, $file->getTempName());
+        finfo_close($finfo);
+        if (!in_array($realMime, $allowed, true)) {
+            return $this->response->setJSON(['error' => 'Only JPEG, PNG, WebP or GIF images are allowed.']);
+        }
+
+        $ext     = $file->getExtension() ?: 'jpg';
+        $newName = generate_uuid() . '.' . $ext;
+        $dir     = WRITEPATH . 'uploads/template-media/';
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
 
-        $newName = $file->getRandomName();
         $file->move($dir, $newName);
 
         return $this->response->setJSON([
-            'url' => base_url('uploads/template-media/' . $newName),
+            'url' => base_url('media/template/' . $newName),
         ]);
+    }
+
+    /**
+     * Public, unguessable URL for Meta template header review.
+     */
+    public function serveTemplateMedia(string $filename)
+    {
+        if (!preg_match('/^[a-f0-9\-]{36}\.[a-z0-9]+$/i', $filename)) {
+            return $this->response->setStatusCode(404)->setBody('Not found');
+        }
+
+        $filePath = realpath(WRITEPATH . 'uploads/template-media/' . $filename);
+        $baseDir  = realpath(WRITEPATH . 'uploads/template-media/');
+
+        if (!$filePath || !$baseDir || !str_starts_with($filePath, $baseDir) || !is_file($filePath)) {
+            return $this->response->setStatusCode(404)->setBody('Not found');
+        }
+
+        $mime = mime_content_type($filePath) ?: 'application/octet-stream';
+
+        return $this->response
+            ->setHeader('Content-Type', $mime)
+            ->setHeader('Cache-Control', 'public, max-age=86400')
+            ->setBody(file_get_contents($filePath));
     }
 
     public function store()
@@ -290,47 +322,93 @@ class TemplatesController extends BaseController
 
         try {
             $waConfig = (new \App\Models\WhatsAppConfigModel())->where('account_id', session('account_id'))->first();
-            if (!$waConfig || empty($waConfig['waba_id'])) {
-                throw new \Exception('WhatsApp not connected or WABA ID missing.');
+            if (!$waConfig || empty($waConfig['phone_number_id'])) {
+                throw new \Exception('WhatsApp not connected. Configure Phone Number ID in Settings first.');
             }
 
-            $accessToken = (new \App\Libraries\WhatsApp\Encryption())->decrypt($waConfig['access_token']);
-            $wabaId      = $waConfig['waba_id'];
-            $client      = \Config\Services::curlrequest(['timeout' => 30, 'http_errors' => false]);
+            $accessToken   = (new \App\Libraries\WhatsApp\Encryption())->decrypt($waConfig['access_token']);
+            $metaApi       = new \App\Libraries\WhatsApp\MetaApi();
+            $phoneNumberId = trim((string) $waConfig['phone_number_id']);
+            $wabaId        = trim((string) ($waConfig['waba_id'] ?? ''));
+            $wabaCorrected = false;
 
-            $synced = 0;
-            $cursor = null;
-            $maxPages = 10;
+            $storedWabaId = $wabaId;
 
-            for ($page = 0; $page < $maxPages; $page++) {
-                $url = "https://graph.facebook.com/" . \App\Libraries\WhatsApp\MetaApi::GRAPH_API_VERSION . "/{$wabaId}/message_templates"
-                     . "?fields=name,status,quality_score,language,category,components"
-                     . "&limit=100"
-                     . ($cursor ? "&after={$cursor}" : '');
-
-                $resp   = $client->get($url, ['headers' => ['Authorization' => 'Bearer ' . $accessToken]]);
-                $result = json_decode($resp->getBody(), true);
-
-                if ($resp->getStatusCode() >= 400) {
-                    throw new \Exception($result['error']['message'] ?? ('HTTP ' . $resp->getStatusCode()));
-                }
-
-                if (empty($result['data'])) break;
-
-                foreach ($result['data'] as $mt) {
-                    $this->upsertMetaTemplate($mt, $wabaId);
-                    $synced++;
-                }
-
-                $cursor = $result['paging']['cursors']['after'] ?? null;
-                if (!$cursor || empty($result['paging']['next'])) break;
+            // Phone Number ID ≠ WABA ID. If missing or swapped, discover the real WABA.
+            if ($wabaId === '' || $wabaId === $phoneNumberId) {
+                $wabaId        = $metaApi->resolveWabaId($phoneNumberId, $accessToken, $storedWabaId ?: null);
+                $wabaCorrected = true;
             }
 
-            return $this->response->setJSON(['success' => true, 'synced' => $synced]);
+            try {
+                $synced = $this->syncTemplatesFromWaba($metaApi, $wabaId, $accessToken);
+            } catch (\Exception $e) {
+                if ($this->isInvalidWabaError($e->getMessage())) {
+                    $wabaId        = $metaApi->resolveWabaId($phoneNumberId, $accessToken, $storedWabaId ?: null);
+                    $wabaCorrected = true;
+                    $synced        = $this->syncTemplatesFromWaba($metaApi, $wabaId, $accessToken);
+                } else {
+                    throw $e;
+                }
+            }
+
+            if ($wabaCorrected) {
+                (new \App\Models\WhatsAppConfigModel())->update($waConfig['id'], ['waba_id' => $wabaId]);
+            }
+
+            return $this->response->setJSON([
+                'success'        => true,
+                'synced'         => $synced,
+                'waba_corrected' => $wabaCorrected,
+                'waba_id'        => $wabaId,
+            ]);
 
         } catch (\Exception $e) {
-            return $this->response->setJSON(['error' => $e->getMessage()])->setStatusCode(500);
+            $message = $e->getMessage();
+            if ($this->isInvalidWabaError($message)) {
+                $message = 'Invalid WhatsApp Business Account ID. Open Settings → WhatsApp and ensure '
+                    . 'WABA ID is the WhatsApp Business Account ID from Meta API Setup (not the Phone Number ID). '
+                    . 'Original error: ' . $message;
+            }
+
+            return $this->response->setJSON(['error' => $message])->setStatusCode(500);
         }
+    }
+
+    private function syncTemplatesFromWaba(\App\Libraries\WhatsApp\MetaApi $metaApi, string $wabaId, string $accessToken): int
+    {
+        $synced   = 0;
+        $cursor   = null;
+        $maxPages = 10;
+
+        for ($page = 0; $page < $maxPages; $page++) {
+            $result = $metaApi->listMessageTemplates($wabaId, $accessToken, $cursor);
+
+            if (empty($result['data'])) {
+                break;
+            }
+
+            foreach ($result['data'] as $mt) {
+                $this->upsertMetaTemplate($mt, $wabaId);
+                $synced++;
+            }
+
+            $cursor = $result['paging']['cursors']['after'] ?? null;
+            if (!$cursor || empty($result['paging']['next'])) {
+                break;
+            }
+        }
+
+        return $synced;
+    }
+
+    private function isInvalidWabaError(string $message): bool
+    {
+        $lower = strtolower($message);
+
+        return str_contains($lower, 'message_templates')
+            || str_contains($lower, 'nonexistent field')
+            || str_contains($lower, 'unsupported get request');
     }
 
     private function upsertMetaTemplate(array $mt, string $wabaId): void
@@ -361,9 +439,10 @@ class TemplatesController extends BaseController
         }
 
         $status       = strtolower($mt['status'] ?? 'pending');
-        $qualityScore = is_array($mt['quality_score'] ?? null)
-            ? strtolower($mt['quality_score']['score'] ?? 'unknown')
-            : null;
+        $qualityRaw = $mt['quality_score'] ?? null;
+        $qualityScore = is_array($qualityRaw)
+            ? strtolower($qualityRaw['score'] ?? 'unknown')
+            : (is_string($qualityRaw) ? strtolower($qualityRaw) : null);
         $lang = strtolower(substr($mt['language'] ?? 'en', 0, 2));
 
         $model = new MessageTemplateModel();

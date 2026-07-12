@@ -7,6 +7,7 @@ use App\Models\BroadcastRecipientModel;
 use App\Models\MessageTemplateModel;
 use App\Models\TagModel;
 use App\Models\ContactModel;
+use App\Libraries\BroadcastAudience;
 use App\Libraries\BroadcastProcessor;
 
 class BroadcastsController extends BaseController
@@ -45,6 +46,10 @@ class BroadcastsController extends BaseController
 
     public function store()
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $name         = trim($this->request->getPost('name') ?? '');
         $templateName = $this->request->getPost('template_name');
 
@@ -66,7 +71,7 @@ class BroadcastsController extends BaseController
 
         $audienceFilter = ['type' => $audienceType];
         if ($audienceType === 'tags') {
-            $audienceFilter['tag_ids'] = array_filter((array) $tagIds);
+            $audienceFilter['tag_ids'] = BroadcastAudience::filterOwnedTagIds((array) $tagIds, session('account_id'));
         }
 
         // Variable map: {1: 'name', 2: 'company', ...}
@@ -174,6 +179,10 @@ class BroadcastsController extends BaseController
 
     public function update(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $model     = new BroadcastModel();
         $broadcast = $model->find($broadcastId);
         if (!$broadcast || $broadcast['status'] !== 'draft') {
@@ -189,7 +198,9 @@ class BroadcastsController extends BaseController
         $audienceType   = $this->request->getPost('audience_type') ?? 'all';
         $tagIds         = $this->request->getPost('tag_ids') ?? [];
         $audienceFilter = ['type' => $audienceType];
-        if ($audienceType === 'tags') $audienceFilter['tag_ids'] = array_filter((array) $tagIds);
+        if ($audienceType === 'tags') {
+            $audienceFilter['tag_ids'] = BroadcastAudience::filterOwnedTagIds((array) $tagIds, session('account_id'));
+        }
 
         $varSources  = $this->request->getPost('var_source') ?? [];
         $variableMap = [];
@@ -220,6 +231,10 @@ class BroadcastsController extends BaseController
 
     public function schedule(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $model     = new BroadcastModel();
         $broadcast = $model->find($broadcastId);
         if (!$broadcast || $broadcast['status'] !== 'draft') {
@@ -243,6 +258,10 @@ class BroadcastsController extends BaseController
 
     public function sendNow(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $broadcast = (new BroadcastModel())->find($broadcastId);
         if (!$broadcast || !in_array($broadcast['status'], ['draft', 'scheduled'])) {
             return redirect()->back()->with('error', 'Cannot send this broadcast.');
@@ -260,6 +279,10 @@ class BroadcastsController extends BaseController
 
     public function cancel(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $model     = new BroadcastModel();
         $broadcast = $model->find($broadcastId);
         if (!$broadcast || $broadcast['status'] !== 'scheduled') {
@@ -293,6 +316,10 @@ class BroadcastsController extends BaseController
 
     public function retryFailed(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $model     = new BroadcastModel();
         $broadcast = $model->find($broadcastId);
         if (!$broadcast) return redirect()->to(base_url('broadcasts'))->with('error', 'Not found.');
@@ -351,6 +378,10 @@ class BroadcastsController extends BaseController
 
     public function duplicate(string $broadcastId)
     {
+        if (!can_send_messages()) {
+            return redirect()->to(base_url('broadcasts'))->with('error', 'Access denied.');
+        }
+
         $model     = new BroadcastModel();
         $broadcast = $model->find($broadcastId);
         if (!$broadcast) return redirect()->to(base_url('broadcasts'))->with('error', 'Not found.');

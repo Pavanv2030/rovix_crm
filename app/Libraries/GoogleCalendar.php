@@ -9,7 +9,7 @@ class GoogleCalendar
     private const CALENDAR_URL = 'https://www.googleapis.com/calendar/v3';
     private const SCOPE        = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events';
 
-    public function getAuthUrl(string $redirectUri): string
+    public function getAuthUrl(string $redirectUri, string $state): string
     {
         return self::AUTH_URL . '?' . http_build_query([
             'client_id'     => env('GOOGLE_CLIENT_ID'),
@@ -18,6 +18,7 @@ class GoogleCalendar
             'scope'         => self::SCOPE,
             'access_type'   => 'offline',
             'prompt'        => 'consent',
+            'state'         => $state,
         ]);
     }
 

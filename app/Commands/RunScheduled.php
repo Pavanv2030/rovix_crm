@@ -25,22 +25,22 @@ class RunScheduled extends BaseCommand
         // Settings → Notifications, so this checks every account's
         // configured time against the current minute instead of a single
         // hardcoded hour for everyone.
-        \App\Models\BaseModel::setBypassAccountScope(true);
-        $currentTime = date('H:i');
-        $accounts    = (new \App\Models\AccountModel())->findAll();
+        \App\Models\BaseModel::runUnscoped(function () {
+            $currentTime = date('H:i');
+            $accounts    = (new \App\Models\AccountModel())->findAll();
 
-        foreach ($accounts as $acct) {
-            $prefs = json_decode($acct['notification_preferences'] ?? '{}', true) ?? [];
-            $founderNumber = trim($prefs['daily_report_founder_number'] ?? '');
-            $hrNumber      = trim($prefs['daily_report_hr_number'] ?? '');
-            $reportTime    = $prefs['daily_report_time'] ?? '08:00';
+            foreach ($accounts as $acct) {
+                $prefs = json_decode($acct['notification_preferences'] ?? '{}', true) ?? [];
+                $founderNumber = trim($prefs['daily_report_founder_number'] ?? '');
+                $hrNumber      = trim($prefs['daily_report_hr_number'] ?? '');
+                $reportTime    = $prefs['daily_report_time'] ?? '08:00';
 
-            if (($founderNumber || $hrNumber) && substr($reportTime, 0, 5) === $currentTime) {
-                CLI::write('Dispatching daily report for account ' . $acct['id'], 'blue');
-                (new JobDispatcher())->dispatch('send_daily_report', ['account_id' => $acct['id']], null, 10);
+                if (($founderNumber || $hrNumber) && substr($reportTime, 0, 5) === $currentTime) {
+                    CLI::write('Dispatching daily report for account ' . $acct['id'], 'blue');
+                    (new JobDispatcher())->dispatch('send_daily_report', ['account_id' => $acct['id']], null, 10);
+                }
             }
-        }
-        \App\Models\BaseModel::setBypassAccountScope(false);
+        });
 
         if ($hour === 2) {
             CLI::write('Running media cleanup...', 'blue');
@@ -58,21 +58,22 @@ class RunScheduled extends BaseCommand
         }
 
         // Dispatch any broadcasts whose scheduled_at has passed
-        \App\Models\BaseModel::setBypassAccountScope(true);
-        $broadcastModel = new \App\Models\BroadcastModel();
-        $due = $broadcastModel
-            ->where('status', 'scheduled')
-            ->where('scheduled_at <=', date('Y-m-d H:i:s'))
-            ->findAll();
+        \App\Models\BaseModel::runUnscoped(function () {
+            $broadcastModel = new \App\Models\BroadcastModel();
+            $due = $broadcastModel
+                ->where('status', 'scheduled')
+                ->where('scheduled_at <=', date('Y-m-d H:i:s'))
+                ->findAll();
 
-        foreach ($due as $broadcast) {
-            CLI::write('Dispatching scheduled broadcast: ' . $broadcast['name'], 'blue');
-            try {
-                (new \App\Libraries\BroadcastProcessor())->prepare($broadcast['id']);
-            } catch (\Exception $e) {
-                CLI::write('  Failed: ' . $e->getMessage(), 'red');
+            foreach ($due as $broadcast) {
+                CLI::write('Dispatching scheduled broadcast: ' . $broadcast['name'], 'blue');
+                try {
+                    (new \App\Libraries\BroadcastProcessor())->prepare($broadcast['id']);
+                } catch (\Exception $e) {
+                    CLI::write('  Failed: ' . $e->getMessage(), 'red');
+                }
             }
-        }
+        });
 
         // Fire time_based automations whose schedule matches current time
         $automationModel = new \App\Models\AutomationModel();

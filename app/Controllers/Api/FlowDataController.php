@@ -12,9 +12,6 @@ class FlowDataController extends BaseController
 {
     /**
      * Meta calls this endpoint when a customer interacts with a Flow screen.
-     * Set endpoint URL in Meta Developer Console → WhatsApp → Flows → your
-     * flow → Endpoint URI. Requests/responses are encrypted per Meta's
-     * Business Encryption spec (RSA-OAEP-SHA256 key unwrap + AES-128-GCM).
      */
     public function handle()
     {
@@ -28,20 +25,12 @@ class FlowDataController extends BaseController
             return $this->response->setStatusCode(400)->setJSON(['error' => 'Missing encrypted fields']);
         }
 
-        // Public endpoint, no session. This app currently manages a single
-        // active WhatsApp connection at a time, so the first row's key pair
-        // is the one Meta encrypted against.
-        $waConfig = (new WhatsAppConfigModel())->first();
-        if (!$waConfig || empty($waConfig['flow_private_key'])) {
-            return $this->response->setStatusCode(421)->setBody('Flow encryption not configured');
-        }
-
         try {
-            $privateKeyPem = (new Encryption())->decrypt($waConfig['flow_private_key']);
-
-            $ivBinary = base64_decode($initialVector);
-            $aesKey   = FlowCrypto::decryptAesKey(base64_decode($encryptedAesKey), $privateKeyPem);
-            $body     = FlowCrypto::decryptFlowData(base64_decode($encryptedFlowData), $aesKey, $ivBinary);
+            [$body, $aesKey, $ivBinary] = $this->decryptEnvelope(
+                $encryptedFlowData,
+                $encryptedAesKey,
+                $initialVector
+            );
         } catch (\Exception $e) {
             log_message('error', 'Flow decryption failed: ' . $e->getMessage());
             return $this->response->setStatusCode(421)->setBody('Decryption failed');
@@ -52,12 +41,10 @@ class FlowDataController extends BaseController
         $flowToken = $body['flow_token'] ?? '';
         $data      = $body['data']       ?? [];
 
-        // Ping health-check from Meta
         if ($action === 'ping') {
             return $this->encryptedReply(['data' => ['status' => 'active']], $aesKey, $ivBinary);
         }
 
-        // Customer tapped "Next" on SELECT_DATE → return time slots for SELECT_TIME
         if ($screen === 'SELECT_DATE' && $action === 'data_exchange') {
             $selectedDate = $data['selected_date'] ?? null;
             $token        = $data['flow_token']    ?? $flowToken;
@@ -97,12 +84,40 @@ class FlowDataController extends BaseController
         return $this->encryptedReply(['data' => []], $aesKey, $ivBinary);
     }
 
+    private function decryptEnvelope(string $encryptedFlowData, string $encryptedAesKey, string $initialVector): array
+    {
+        $configs = (new WhatsAppConfigModel())
+            ->where('flow_private_key IS NOT NULL')
+            ->where('flow_private_key !=', '')
+            ->findAll();
+
+        if (empty($configs)) {
+            throw new \RuntimeException('Flow encryption not configured');
+        }
+
+        $encryption = new Encryption();
+        $lastError  = null;
+
+        foreach ($configs as $waConfig) {
+            try {
+                $privateKeyPem = $encryption->decrypt($waConfig['flow_private_key']);
+                $ivBinary      = base64_decode($initialVector);
+                $aesKey        = FlowCrypto::decryptAesKey(base64_decode($encryptedAesKey), $privateKeyPem);
+                $body          = FlowCrypto::decryptFlowData(base64_decode($encryptedFlowData), $aesKey, $ivBinary);
+
+                return [$body, $aesKey, $ivBinary];
+            } catch (\Exception $e) {
+                $lastError = $e;
+            }
+        }
+
+        throw $lastError ?? new \RuntimeException('Decryption failed');
+    }
+
     private function encryptedReply(array $data, string $aesKey, string $ivBinary)
     {
         $encrypted = FlowCrypto::encryptResponse($data, $aesKey, $ivBinary);
 
-        // Meta requires the raw base64 string as the body, Content-Type
-        // text/plain — NOT wrapped in JSON.
         return $this->response
             ->setContentType('text/plain')
             ->setBody($encrypted);

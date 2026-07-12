@@ -39,3 +39,10 @@ yarn-error.log
 # Build artifacts
 public/build/
 .gstack/
+
+# Runtime data leaked into public/ during dev
+public/writable/
+public/test_db.php
+
+# Audit docs with secret fragments — keep local, don't push public
+SECURITY-AUDIT.md

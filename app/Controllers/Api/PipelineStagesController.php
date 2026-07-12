@@ -62,7 +62,21 @@ class PipelineStagesController extends BaseController
         $stageIds = $this->request->getPost('stage_ids') ?? [];
         if (empty($stageIds)) return $this->response->setStatusCode(400)->setJSON(['error' => 'Stage IDs required']);
 
-        $db = \Config\Database::connect();
+        $db         = \Config\Database::connect();
+        $accountId  = session('account_id');
+        $ownedStages = $db->table('pipeline_stages ps')
+            ->select('ps.id')
+            ->join('pipelines pl', 'pl.id = ps.pipeline_id')
+            ->where('pl.account_id', $accountId)
+            ->whereIn('ps.id', $stageIds)
+            ->get()
+            ->getResultArray();
+        $ownedIds = array_column($ownedStages, 'id');
+
+        if (count($ownedIds) !== count($stageIds)) {
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'One or more stages do not belong to your account']);
+        }
+
         foreach ($stageIds as $position => $stageId) {
             $db->table('pipeline_stages')->where('id', $stageId)->update(['position' => $position]);
         }
@@ -73,6 +87,17 @@ class PipelineStagesController extends BaseController
     public function delete(string $stageId)
     {
         $db = \Config\Database::connect();
+
+        $stage = $db->table('pipeline_stages ps')
+            ->join('pipelines pl', 'pl.id = ps.pipeline_id')
+            ->where('ps.id', $stageId)
+            ->where('pl.account_id', session('account_id'))
+            ->get()
+            ->getRowArray();
+
+        if (!$stage) {
+            return $this->response->setStatusCode(404)->setJSON(['error' => 'Stage not found']);
+        }
 
         $dealCount = $db->table('deals')->where('stage_id', $stageId)->where('account_id', session('account_id'))->countAllResults();
         if ($dealCount > 0) {

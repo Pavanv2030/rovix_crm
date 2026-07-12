@@ -112,6 +112,22 @@ class SettingsController extends BaseController
             $data['access_token'] = (new Encryption())->encrypt($newToken);
         }
 
+        // Auto-fix the common mistake of pasting Phone Number ID into WABA ID.
+        if ($data['waba_id'] === $data['phone_number_id']) {
+            try {
+                $token = $newToken !== ''
+                    ? $newToken
+                    : (new Encryption())->decrypt($existing['access_token'] ?? '');
+                $data['waba_id'] = (new \App\Libraries\WhatsApp\MetaApi())
+                    ->resolveWabaId($data['phone_number_id'], $token);
+            } catch (\Throwable $e) {
+                return $this->response->setJSON([
+                    'error' => 'WABA ID cannot be the same as Phone Number ID. '
+                        . 'Enter your WhatsApp Business Account ID from Meta API Setup.',
+                ])->setStatusCode(400);
+            }
+        }
+
         if ($existing) {
             $waConfigModel->update($existing['id'], $data);
         } else {
@@ -123,6 +139,90 @@ class SettingsController extends BaseController
         ActivityLogModel::record('settings.whatsapp_updated', 'account', session('account_id'));
 
         return $this->response->setJSON(['success' => true]);
+    }
+
+    public function sendDemoReport()
+    {
+        if (!can_edit_settings()) {
+            return $this->response->setJSON(['error' => 'Access denied'])->setStatusCode(403);
+        }
+
+        $phone = trim($this->request->getPost('phone') ?? '');
+        if ($phone === '') {
+            return $this->response->setJSON(['error' => 'Phone number required'])->setStatusCode(400);
+        }
+
+        $normalized = \App\Libraries\WhatsApp\PhoneUtils::normalize($phone);
+        if (strlen($normalized) === 10) {
+            $normalized = '91' . $normalized;
+        }
+
+        $accountId = session('account_id');
+        $waConfig  = (new WhatsAppConfigModel())->where('account_id', $accountId)->first();
+        if (!$waConfig || ($waConfig['status'] ?? '') !== 'connected') {
+            return $this->response->setJSON(['error' => 'WhatsApp not connected'])->setStatusCode(400);
+        }
+
+        $account = (new AccountModel())->find($accountId);
+        $digest  = new \App\Libraries\DailyDigestService();
+        $stats   = $digest->generateStats($accountId);
+        $message = $digest->formatMessage($stats, 'founder');
+        $message = "[DEMO PREVIEW]\n\n" . $message;
+
+        $metaApi     = new \App\Libraries\WhatsApp\MetaApi();
+        $accessToken = (new Encryption())->decrypt($waConfig['access_token']);
+
+        try {
+            $result = $metaApi->sendText(
+                $waConfig['phone_number_id'],
+                $accessToken,
+                $normalized,
+                $message
+            );
+
+            ActivityLogModel::record('settings.demo_report_sent', 'account', $accountId, [
+                'phone' => $normalized,
+            ]);
+
+            return $this->response->setJSON([
+                'success'    => true,
+                'message'    => 'Demo report sent via WhatsApp',
+                'message_id' => $result['messages'][0]['id'] ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            $template = $this->resolveReportTemplate($account);
+
+            if (!$template) {
+                log_message('error', 'Demo report send failed: ' . $e->getMessage());
+                return $this->response->setJSON([
+                    'error' => $e->getMessage(),
+                    'hint'  => 'Select an approved daily report template in Settings → Notifications.',
+                ])->setStatusCode(500);
+            }
+
+            try {
+                $variables  = $digest->formatTemplateVariables($stats, 'founder');
+                $variables['body_1'] = '[DEMO] ' . $variables['body_1'];
+                $components = \App\Libraries\WhatsApp\TemplateSendBuilder::buildComponents($template, $variables);
+                $result     = $metaApi->sendTemplate(
+                    $waConfig['phone_number_id'],
+                    $accessToken,
+                    $normalized,
+                    $template['name'],
+                    $template['language'] ?? 'en',
+                    $components
+                );
+
+                return $this->response->setJSON([
+                    'success'    => true,
+                    'message'    => 'Demo report sent via template (' . $template['name'] . ')',
+                    'message_id' => $result['messages'][0]['id'] ?? null,
+                ]);
+            } catch (\Throwable $e2) {
+                log_message('error', 'Demo report template send failed: ' . $e2->getMessage());
+                return $this->response->setJSON(['error' => $e2->getMessage()])->setStatusCode(500);
+            }
+        }
     }
 
     public function testWhatsApp()
@@ -161,6 +261,37 @@ class SettingsController extends BaseController
         }
     }
 
+    private function formatMetaFetchError(string $message): string
+    {
+        if (str_contains($message, 'API access blocked')) {
+            return 'Meta has blocked API access for this app/token. '
+                . 'Go to developers.facebook.com → your app → WhatsApp → API Setup → Generate a NEW access token. '
+                . 'Paste the full token in the Access Token field above (do not leave blank), click Save Configuration, then Fetch again. '
+                . 'Also check business.facebook.com → WhatsApp Manager for verification or payment warnings.';
+        }
+
+        if (str_contains($message, '401') || str_contains($message, '190') || str_contains($message, 'OAuthException')) {
+            return 'Invalid or expired access token. Generate a new token in Meta → WhatsApp → API Setup, paste it in the Access Token field (required — leaving blank keeps the old token), Save, then Fetch again.';
+        }
+
+        return $message;
+    }
+
+    private function deriveAccountMode(array $data): ?string
+    {
+        $platform = strtoupper((string) ($data['platform_type'] ?? ''));
+        if ($platform === 'CLOUD_API' || $platform === 'NOT_APPLICABLE') {
+            return 'LIVE';
+        }
+
+        $status = strtoupper((string) ($data['status'] ?? ''));
+        if ($status === 'CONNECTED') {
+            return 'LIVE';
+        }
+
+        return $platform !== '' ? $platform : ($status !== '' ? $status : null);
+    }
+
     public function fetchNumberInfo()
     {
         if (!can_edit_settings()) {
@@ -174,20 +305,12 @@ class SettingsController extends BaseController
 
         try {
             $accessToken = (new Encryption())->decrypt($waConfig['access_token']);
-            $client      = \Config\Services::curlrequest(['timeout' => 15]);
-            $response    = $client->get(
-                'https://graph.facebook.com/' . \App\Libraries\WhatsApp\MetaApi::GRAPH_API_VERSION . '/' . $waConfig['phone_number_id'],
-                [
-                    'query'   => ['fields' => 'display_phone_number,verified_name,quality_rating,name_status,account_mode'],
-                    'headers' => ['Authorization' => 'Bearer ' . $accessToken],
-                ]
+            $data        = (new \App\Libraries\WhatsApp\MetaApi())->getPhoneNumberInfo(
+                $waConfig['phone_number_id'],
+                $accessToken
             );
 
-            $data = json_decode($response->getBody(), true);
-
-            if (isset($data['error'])) {
-                return $this->response->setJSON(['error' => $data['error']['message'] ?? 'Meta API error'])->setStatusCode(400);
-            }
+            $accountMode = $this->deriveAccountMode($data);
 
             $waConfigModel = new WhatsAppConfigModel();
             $waConfigModel->update($waConfig['id'], [
@@ -195,7 +318,7 @@ class SettingsController extends BaseController
                 'verified_name'           => $data['verified_name']        ?? null,
                 'quality_rating'          => $data['quality_rating']       ?? null,
                 'name_status'             => $data['name_status']          ?? null,
-                'account_mode'            => $data['account_mode']         ?? null,
+                'account_mode'            => $accountMode,
                 'number_info_fetched_at'  => date('Y-m-d H:i:s'),
             ]);
 
@@ -205,11 +328,12 @@ class SettingsController extends BaseController
                 'verified_name'        => $data['verified_name']        ?? null,
                 'quality_rating'       => $data['quality_rating']       ?? 'UNKNOWN',
                 'name_status'          => $data['name_status']          ?? null,
-                'account_mode'         => $data['account_mode']         ?? null,
+                'account_mode'         => $accountMode,
             ]);
         } catch (\Throwable $e) {
             log_message('error', 'fetchNumberInfo failed: ' . $e->getMessage());
-            return $this->response->setJSON(['error' => $e->getMessage()])->setStatusCode(500);
+            $message = $this->formatMetaFetchError($e->getMessage());
+            return $this->response->setJSON(['error' => $message])->setStatusCode(400);
         }
     }
 
@@ -325,6 +449,8 @@ class SettingsController extends BaseController
             'owner_whatsapp_number'    => $ownerPhone,
             'daily_report_founder_number' => trim($this->request->getPost('daily_report_founder_number') ?? ''),
             'daily_report_hr_number'      => trim($this->request->getPost('daily_report_hr_number') ?? ''),
+            'daily_report_founder_email'  => trim($this->request->getPost('daily_report_founder_email') ?? ''),
+            'daily_report_hr_email'       => trim($this->request->getPost('daily_report_hr_email') ?? ''),
             'daily_report_time'           => $this->request->getPost('daily_report_time') ?: '08:00',
             'daily_report_template_id'    => $this->request->getPost('daily_report_template_id') ?: null,
         ];
@@ -419,5 +545,39 @@ class SettingsController extends BaseController
     public function customFields()
     {
         return view('settings/custom_fields', ['pageTitle' => 'Custom Fields']);
+    }
+
+    private function resolveReportTemplate(array $account): ?array
+    {
+        $prefs      = json_decode($account['notification_preferences'] ?? '{}', true) ?? [];
+        $templateId = $prefs['daily_report_template_id'] ?? null;
+
+        if ($templateId) {
+            $template = (new MessageTemplateModel())->find($templateId);
+            if ($template) {
+                return $template;
+            }
+        }
+
+        return (new MessageTemplateModel())
+            ->where('account_id', $account['id'])
+            ->where('status', 'approved')
+            ->orderBy('updated_at', 'DESC')
+            ->first();
+    }
+
+    public function previewDailyReport()
+    {
+        if (!can_edit_settings()) {
+            return redirect()->to(base_url('dashboard'))->with('error', 'Access denied. Admin required.');
+        }
+
+        $role   = $this->request->getGet('role') === 'hr' ? 'hr' : 'founder';
+        $digest = new \App\Libraries\DailyDigestService();
+        $stats  = $digest->generateStats(session('account_id'));
+
+        return $this->response
+            ->setContentType('text/html')
+            ->setBody($digest->renderEmailHtml($stats, $role));
     }
 }

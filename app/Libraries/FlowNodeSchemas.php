@@ -28,8 +28,11 @@ class FlowNodeSchemas
             'end'                => self::end(),
             'send_catalog'       => self::sendCatalog(),
             'send_product'       => self::sendProduct(),
+            'send_template'      => self::sendTemplate(),
+            'appointment_booking' => self::appointmentBooking(),
             'http_request'       => self::httpRequest(),
             'ai_node'            => self::aiNode(),
+            'trigger_flow'       => self::triggerFlow(),
             default              => [],
         };
     }
@@ -41,7 +44,8 @@ class FlowNodeSchemas
             'send_media', 'send_media_buttons', 'url_button',
             'request_location', 'collect_input', 'collect_form',
             'condition', 'set_tag', 'add_to_group', 'handoff', 'end',
-            'send_catalog', 'send_product', 'http_request', 'ai_node',
+            'send_catalog', 'send_product', 'send_template', 'appointment_booking',
+            'http_request', 'ai_node', 'trigger_flow',
         ];
     }
 
@@ -230,6 +234,7 @@ class FlowNodeSchemas
                         ['value' => 'variable_equals',   'label' => 'Variable equals value'],
                         ['value' => 'variable_contains', 'label' => 'Variable contains text'],
                         ['value' => 'contact_has_tag',   'label' => 'Contact has tag'],
+                        ['value' => 'ai_decision',       'label' => 'AI Decision'],
                     ],
                 ]),
                 self::field('variable', 'Variable Name', 'text', true, [
@@ -243,6 +248,11 @@ class FlowNodeSchemas
                 ]),
                 self::field('tag_id', 'Tag', 'tag_select', true, [
                     'show_if' => 'condition_type == contact_has_tag',
+                ]),
+                self::field('ai_prompt', 'AI Decision Prompt', 'textarea', true, [
+                    'show_if' => 'condition_type == ai_decision',
+                    'placeholder' => 'Use {{variables}} in your prompt. AI will evaluate to TRUE or FALSE.\n\nExample: "Does {{user_message}} indicate customer is angry or frustrated?"',
+                    'help' => 'AI will evaluate this prompt and return TRUE or FALSE',
                 ]),
                 self::field('true_node',  'If TRUE → Go To',  'node_select', true),
                 self::field('false_node', 'If FALSE → Go To', 'node_select', true),
@@ -445,6 +455,9 @@ class FlowNodeSchemas
             'has_single_output' => true,
             'terminates_flow'   => false,
             'config_fields'     => [
+                self::field('catalog_id', 'Catalog', 'catalog_select', false, [
+                    'help' => 'Leave empty to use account default catalog',
+                ]),
                 self::field('body_text', 'Message Body', 'textarea', true, [
                     'placeholder' => 'Check out our products! Browse and order below.',
                     'max_length'  => 1024,
@@ -468,6 +481,9 @@ class FlowNodeSchemas
             'has_single_output' => true,
             'terminates_flow'   => false,
             'config_fields'     => [
+                self::field('catalog_id', 'Catalog', 'catalog_select', false, [
+                    'help' => 'Leave empty to use account default catalog',
+                ]),
                 self::field('product_retailer_id', 'Product Retailer ID', 'text', true, [
                     'placeholder' => 'Enter product retailer_id from your catalog',
                 ]),
@@ -577,6 +593,99 @@ class FlowNodeSchemas
                         ['value' => 'no',  'label' => 'No — just save it, use it later in the flow'],
                         ['value' => 'yes', 'label' => 'Yes — send it as a WhatsApp message immediately'],
                     ],
+                ]),
+                self::field('next_node', 'Next Node', 'node_select', true),
+            ],
+        ];
+    }
+
+    private static function sendTemplate(): array
+    {
+        return [
+            'name'              => 'Send Template',
+            'description'       => 'Send an approved WhatsApp message template',
+            'icon'              => '<svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M4 3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4Zm3 2h6v2H7V5Zm0 4h6v2H7V9Zm0 4h4v2H7v-2Z" clip-rule="evenodd"/></svg>',
+            'color'             => '#8B5CF6',
+            'has_single_output' => true,
+            'terminates_flow'   => false,
+            'config_fields'     => [
+                self::field('template_id', 'Template', 'template_select', true, [
+                    'help' => 'Select an approved message template',
+                ]),
+                self::field('template_params', 'Template Parameters', 'key_value_list', false, [
+                    'max_items'   => 10,
+                    'item_schema' => [
+                        self::field('key',   'Parameter Name', 'text', true, ['placeholder' => '1']),
+                        self::field('value', 'Value',          'text', true, ['placeholder' => '{{user_name}}']),
+                    ],
+                    'help' => 'Map template placeholders (use {{variable}} for dynamic values)',
+                ]),
+                self::field('next_node', 'Next Node', 'node_select', true),
+            ],
+        ];
+    }
+
+    private static function appointmentBooking(): array
+    {
+        return [
+            'name'              => 'Appointment Booking',
+            'description'       => 'Collect appointment details and schedule booking',
+            'icon'              => '<svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M6 2a1 1 0 0 0-1 1v1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1V3a1 1 0 1 0-2 0v1H7V3a1 1 0 0 0-1-1Zm0 5a1 1 0 0 0 0 2h8a1 1 0 1 0 0-2H6Z" clip-rule="evenodd"/></svg>',
+            'color'             => '#10B981',
+            'has_single_output' => true,
+            'terminates_flow'   => false,
+            'config_fields'     => [
+                self::field('prompt_text', 'Booking Prompt', 'textarea', true, [
+                    'placeholder' => 'Would you like to book an appointment? Please provide your preferred date and time.',
+                    'max_length'  => 1024,
+                ]),
+                self::field('date_variable', 'Save Date As', 'text', true, [
+                    'placeholder' => 'appointment_date',
+                ]),
+                self::field('time_variable', 'Save Time As', 'text', true, [
+                    'placeholder' => 'appointment_time',
+                ]),
+                self::field('name_variable', 'Save Name As', 'text', false, [
+                    'placeholder' => 'customer_name',
+                ]),
+                self::field('notes_variable', 'Save Notes As', 'text', false, [
+                    'placeholder' => 'appointment_notes',
+                ]),
+                self::field('confirmation_message', 'Confirmation Message', 'textarea', false, [
+                    'placeholder' => 'Your appointment is confirmed for {{appointment_date}} at {{appointment_time}}',
+                    'max_length'  => 500,
+                ]),
+                self::field('next_node', 'Next Node', 'node_select', true),
+            ],
+        ];
+    }
+
+    private static function triggerFlow(): array
+    {
+        return [
+            'name'              => 'Trigger Flow',
+            'description'       => 'Start another flow programmatically and pass variables',
+            'icon'              => '<svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M5.22 14.78a.75.75 0 0 0 1.06 0l7.22-7.22v5.69a.75.75 0 0 0 1.5 0v-7.5a.75.75 0 0 0-.75-.75h-7.5a.75.75 0 0 0 0 1.5h5.69l-7.22 7.22a.75.75 0 0 0 0 1.06Z"/></svg>',
+            'color'             => '#F59E0B',
+            'has_single_output' => true,
+            'terminates_flow'   => false,
+            'config_fields'     => [
+                self::field('target_flow_id', 'Target Flow', 'flow_select', true, [
+                    'help' => 'Select the flow you want to trigger',
+                ]),
+                self::field('end_current', 'End Current Flow', 'select', false, [
+                    'options' => [
+                        ['value' => '0', 'label' => 'No - continue both flows'],
+                        ['value' => '1', 'label' => 'Yes - end this flow after triggering'],
+                    ],
+                ]),
+                self::field('variable_mapping', 'Pass Variables', 'key_value_list', false, [
+                    'max_items'   => 10,
+                    'item_schema' => [
+                        self::field('source', 'From (current flow)', 'text', true, ['placeholder' => 'user_email']),
+                        self::field('target', 'To (target flow)',    'text', true, ['placeholder' => 'email']),
+                    ],
+                    'help' => 'Map variables from this flow to the target flow',
                 ]),
                 self::field('next_node', 'Next Node', 'node_select', true),
             ],

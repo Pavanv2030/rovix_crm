@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Models\ActivityLogModel;
 use App\Models\FlowModel;
 use App\Models\FlowNodeModel;
 use App\Models\FlowRunModel;
@@ -24,7 +25,37 @@ class FlowsController extends BaseController
             ->findAll();
         ProfileModel::setBypassAccountScope(false);
 
-        return ['tags' => $tags, 'agents' => $agents];
+        // Get WhatsApp catalog info from whatsapp_config
+        $catalogs = [];
+        $db = \Config\Database::connect();
+        $waConfig = $db->table('whatsapp_config')
+            ->where('account_id', session('account_id'))
+            ->where('status', 'connected')
+            ->get()->getRowArray();
+
+        if ($waConfig && !empty($waConfig['catalog_id'])) {
+            $catalogs[] = [
+                'catalog_id' => $waConfig['catalog_id'],
+                'name'       => $waConfig['catalog_name'] ?: $waConfig['catalog_id'],
+            ];
+        }
+
+        // Get message templates
+        $templates = $db->table('message_templates')
+            ->where('account_id', session('account_id'))
+            ->where('status', 'approved')
+            ->get()->getResultArray();
+
+        // Get all flows for trigger_flow node
+        $flows = (new FlowModel())->where('is_active', 1)->findAll();
+
+        return [
+            'tags'      => $tags,
+            'agents'    => $agents,
+            'catalogs'  => $catalogs,
+            'templates' => $templates,
+            'flows'     => $flows,
+        ];
     }
 
     public function index()
@@ -59,27 +90,37 @@ class FlowsController extends BaseController
     {
         $body = $this->request->getJSON(true);
 
-        $name     = trim($body['name'] ?? '');
-        $keywords = $body['trigger_keywords'] ?? [];
-        $isActive = (int)($body['is_active'] ?? 1);
-        $flowData = $body['flow_data'] ?? null;
+        $name        = trim($body['name'] ?? '');
+        $keywords    = $body['trigger_keywords'] ?? [];
+        $isActive    = (int)($body['is_active'] ?? 1);
+        $flowData    = $body['flow_data'] ?? null;
+        $triggerType = $body['trigger_type'] ?? 'keyword';
+        $aiIntentDesc = trim($body['ai_intent_description'] ?? '');
 
         if (empty($name)) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'Name is required.']);
         }
-        if (empty($keywords)) {
+
+        if ($triggerType === 'keyword' && empty($keywords)) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'At least one trigger keyword is required.']);
         }
+
+        if ($triggerType === 'ai_intent' && empty($aiIntentDesc)) {
+            return $this->response->setStatusCode(422)->setJSON(['error' => 'AI intent description is required.']);
+        }
+
         if (!$flowData) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'Flow canvas is empty.']);
         }
 
         $flowModel = new FlowModel();
         $flowId    = $flowModel->insert([
-            'name'             => $name,
-            'is_active'        => $isActive,
-            'trigger_keywords' => json_encode(array_values($keywords)),
-            'execution_count'  => 0,
+            'name'                  => $name,
+            'is_active'             => $isActive,
+            'trigger_type'          => $triggerType,
+            'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
+            'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
+            'execution_count'       => 0,
         ]);
 
         $this->saveNodes($flowId, $flowData);
@@ -132,25 +173,40 @@ class FlowsController extends BaseController
             return $this->response->setStatusCode(404)->setJSON(['error' => 'Flow not found.']);
         }
 
-        $name     = trim($body['name'] ?? '');
-        $keywords = $body['trigger_keywords'] ?? [];
-        $isActive = (int)($body['is_active'] ?? $flow['is_active']);
-        $flowData = $body['flow_data'] ?? null;
+        $name         = trim($body['name'] ?? '');
+        $keywords     = $body['trigger_keywords'] ?? [];
+        $isActive     = (int)($body['is_active'] ?? $flow['is_active']);
+        $flowData     = $body['flow_data'] ?? null;
+        $triggerType  = $body['trigger_type'] ?? $flow['trigger_type'];
+        $aiIntentDesc = trim($body['ai_intent_description'] ?? '');
 
         if (empty($name)) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'Name is required.']);
         }
 
+        if ($triggerType === 'keyword' && empty($keywords)) {
+            return $this->response->setStatusCode(422)->setJSON(['error' => 'At least one trigger keyword is required.']);
+        }
+
+        if ($triggerType === 'ai_intent' && empty($aiIntentDesc)) {
+            return $this->response->setStatusCode(422)->setJSON(['error' => 'AI intent description is required.']);
+        }
+
         $flowModel->update($flowId, [
-            'name'             => $name,
-            'is_active'        => $isActive,
-            'trigger_keywords' => json_encode(array_values($keywords)),
+            'name'                  => $name,
+            'is_active'             => $isActive,
+            'trigger_type'          => $triggerType,
+            'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
+            'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
         ]);
 
         if ($flowData) {
             (new FlowNodeModel())->where('flow_id', $flowId)->delete();
             $this->saveNodes($flowId, $flowData);
         }
+
+        // Audit trail
+        ActivityLogModel::record('flow.updated', 'flow', $flowId, ['name' => $name, 'is_active' => $isActive, 'trigger_type' => $triggerType]);
 
         return $this->response->setJSON(['success' => true]);
     }
@@ -409,6 +465,36 @@ class FlowsController extends BaseController
                     }
                 }
             }
+        } elseif ($waitingFor === 'appointment_booking') {
+            $step = $state['appt_step'] ?? 'date';
+            $config = $state['appt_config'] ?? [];
+
+            if ($step === 'date') {
+                $state['vars'][$config['date_variable'] ?? 'appointment_date'] = $message;
+                $state['appt_step'] = 'time';
+                $responses[] = ['type' => 'text', 'text' => 'What time would you prefer?'];
+            } elseif ($step === 'time') {
+                $state['vars'][$config['time_variable'] ?? 'appointment_time'] = $message;
+                if (!empty($config['name_variable'])) {
+                    $state['appt_step'] = 'name';
+                    $responses[] = ['type' => 'text', 'text' => 'Please provide your full name.'];
+                } else {
+                    $this->finishTestAppointment($state, $config, $responses, $nodesByKey);
+                }
+            } elseif ($step === 'name') {
+                $state['vars'][$config['name_variable']] = $message;
+                if (!empty($config['notes_variable'])) {
+                    $state['appt_step'] = 'notes';
+                    $responses[] = ['type' => 'text', 'text' => 'Any notes or special requests? (Type "skip" to skip)'];
+                } else {
+                    $this->finishTestAppointment($state, $config, $responses, $nodesByKey);
+                }
+            } elseif ($step === 'notes') {
+                if (strtolower(trim($message)) !== 'skip') {
+                    $state['vars'][$config['notes_variable']] = $message;
+                }
+                $this->finishTestAppointment($state, $config, $responses, $nodesByKey);
+            }
         }
 
         $isComplete = in_array($state['status'], ['completed', 'handed_off', 'failed']);
@@ -597,6 +683,18 @@ class FlowsController extends BaseController
                 $this->testExecute($config['next_node'] ?? null, $nodesByKey, $state, $responses, $depth + 1);
                 break;
 
+            case 'send_template':
+                $responses[] = ['type' => 'system', 'text' => 'Send Template [test mode — skipped]'];
+                $this->testExecute($config['next_node'] ?? null, $nodesByKey, $state, $responses, $depth + 1);
+                break;
+
+            case 'appointment_booking':
+                $responses[] = ['type' => 'text', 'text' => $this->testInterpolate($config['prompt_text'] ?? 'Please provide appointment details.', $vars)];
+                $state['waiting_for'] = 'appointment_booking';
+                $state['appt_step'] = 'date';
+                $state['appt_config'] = $config;
+                break;
+
             case 'handoff':
                 $msg = $config['handoff_message'] ?? 'Connecting you with our team…';
                 if ($msg) $responses[] = ['type' => 'text', 'text' => $msg];
@@ -614,6 +712,17 @@ class FlowsController extends BaseController
             default:
                 $this->testExecute($config['next_node'] ?? null, $nodesByKey, $state, $responses, $depth + 1);
         }
+    }
+
+    private function finishTestAppointment(array &$state, array $config, array &$responses, array $nodesByKey): void
+    {
+        $confirmationMsg = $this->testInterpolate($config['confirmation_message'] ?? 'Appointment confirmed!', $state['vars']);
+        if ($confirmationMsg) {
+            $responses[] = ['type' => 'text', 'text' => $confirmationMsg];
+        }
+        unset($state['appt_step'], $state['appt_config']);
+        $state['waiting_for'] = null;
+        $this->testExecute($config['next_node'] ?? null, $nodesByKey, $state, $responses);
     }
 
     private function testInterpolate(string $text, array $vars): string

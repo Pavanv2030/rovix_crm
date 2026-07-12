@@ -192,11 +192,14 @@ class BroadcastProcessor
 
         // Increment counters atomically
         $db = \Config\Database::connect();
-        $db->query("UPDATE broadcasts SET sent_count = sent_count + ?, failed_count = failed_count + ?, updated_at = NOW() WHERE id = ?", [
-            $results['sent'],
-            $results['failed'],
-            $broadcastId,
-        ]);
+        $db->table('broadcasts')
+            ->where('id', $broadcastId)
+            ->set([
+                'sent_count' => 'sent_count + ' . (int)$results['sent'],
+                'failed_count' => 'failed_count + ' . (int)$results['failed'],
+                'updated_at' => 'NOW()'
+            ], false) // false = don't escape SQL functions
+            ->update();
 
         return $results;
     }
@@ -243,23 +246,49 @@ class BroadcastProcessor
         $contactModel   = new ContactModel();
         $audienceFilter = json_decode($broadcast['audience_filter'] ?? '{}', true);
         $type           = $audienceFilter['type'] ?? 'all';
+        $db             = \Config\Database::connect();
+
+        // Find the ID of the 'Unsubscribed' tag for this account (if it exists)
+        $unsubscribedTag = $db->table('tags')
+            ->where('account_id', $broadcast['account_id'])
+            ->where('name', 'Unsubscribed')
+            ->get()->getRowArray();
+        $unsubscribedTagId = $unsubscribedTag['id'] ?? null;
 
         if ($type === 'all') {
-            return $contactModel->findAll();
+            $builder = $contactModel->where('account_id', $broadcast['account_id']);
+            $this->applyUnsubscribeFilter($builder, $unsubscribedTagId, 'id');
+            return $builder->findAll();
         }
 
         if ($type === 'tags' && !empty($audienceFilter['tag_ids'])) {
-            $db = \Config\Database::connect();
-            return $db->table('contacts c')
+            $query = $db->table('contacts c')
                 ->select('c.*')
                 ->join('contact_tags ct', 'ct.contact_id = c.id')
                 ->whereIn('ct.tag_id', $audienceFilter['tag_ids'])
-                ->where('c.account_id', $broadcast['account_id'])
-                ->groupBy('c.id')
+                ->where('c.account_id', $broadcast['account_id']);
+
+            $this->applyUnsubscribeFilter($query, $unsubscribedTagId, 'c.id');
+
+            return $query->groupBy('c.id')
                 ->get()->getResultArray();
         }
 
         return [];
+    }
+
+    /**
+     * Exclude contacts who have the 'Unsubscribed' tag.
+     */
+    private function applyUnsubscribeFilter($builder, ?string $unsubscribedTagId, string $idColumn): void
+    {
+        if (!$unsubscribedTagId) {
+            return;
+        }
+
+        $builder->whereNotIn($idColumn, function ($subQuery) use ($unsubscribedTagId) {
+            return $subQuery->select('contact_id')->from('contact_tags')->where('tag_id', $unsubscribedTagId);
+        });
     }
 
     private function resolveVariables(array $variableMap, array $contact): array

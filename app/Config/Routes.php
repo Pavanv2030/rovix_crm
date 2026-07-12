@@ -10,7 +10,16 @@ $routes->post('login', 'AuthController::attemptLogin');
 $routes->get('signup', 'AuthController::signup');
 $routes->post('signup', 'AuthController::register');
 $routes->get('forgot-password', 'AuthController::forgotPassword');
+$routes->post('forgot-password', 'AuthController::sendPasswordReset');
+$routes->get('reset-password/(:segment)', 'AuthController::resetPasswordForm/$1');
+$routes->post('reset-password/(:segment)', 'AuthController::resetPassword/$1');
 $routes->post('logout', 'AuthController::logout');
+
+// Public template media (unguessable UUID filenames for Meta review)
+$routes->get('media/template/(:segment)', 'TemplatesController::serveTemplateMedia/$1');
+
+// Demo report sender (requires rovix.demoReportKey in .env)
+$routes->get('demo/send-report', 'DemoController::sendReport');
 
 // Dashboard
 $routes->get('/', 'DashboardController::index');
@@ -34,11 +43,13 @@ $routes->post('settings/update-account',          'SettingsController::updateAcc
 $routes->get('settings/whatsapp',                 'SettingsController::whatsapp');
 $routes->post('settings/update-whatsapp',         'SettingsController::updateWhatsApp');
 $routes->post('settings/test-whatsapp',           'SettingsController::testWhatsApp');
+$routes->post('settings/send-demo-report',        'SettingsController::sendDemoReport');
 $routes->post('settings/fetch-number-info',       'SettingsController::fetchNumberInfo');
 $routes->get('settings/ai',                       'SettingsController::ai');
 $routes->post('settings/update-ai',               'SettingsController::updateAi');
 $routes->get('settings/notifications',            'SettingsController::notifications');
 $routes->post('settings/update-notifications',    'SettingsController::updateNotifications');
+$routes->get('settings/daily-report-preview',     'SettingsController::previewDailyReport');
 $routes->get('settings/api-keys',                 'SettingsController::apiKeys');
 $routes->post('settings/regenerate-api-key',      'SettingsController::regenerateApiKey');
 $routes->get('settings/webhooks',                 'SettingsController::webhooks');
@@ -214,6 +225,7 @@ $routes->get('team/accept/(:any)', 'TeamController::accept/$1');
 $routes->post('team/accept/process', 'TeamController::processAccept');
 $routes->post('team/invitations/(:segment)/resend', 'TeamController::resendInvitation/$1');
 $routes->post('team/invitations/(:segment)/cancel', 'TeamController::cancelInvitation/$1');
+$routes->post('team/invitations/(:segment)/link', 'TeamController::inviteLink/$1');
 $routes->post('team/(:segment)/update-role', 'TeamController::updateRole/$1');
 $routes->post('team/(:segment)/toggle-active', 'TeamController::toggleActive/$1');
 $routes->post('team/(:segment)/remove', 'TeamController::remove/$1');
@@ -245,7 +257,6 @@ $routes->post('api/appointments/send-flow',                 'Api\AppointmentsCon
 $routes->post('api/flows/data-exchange',                    'Api\FlowDataController::handle');
 
 // Public booking page (no auth, see Filters.php 'except' rules)
-$routes->get('booking/test-flows',                          'Home::index');
 $routes->get('booking/(:segment)',                          'BookingController::show/$1');
 $routes->post('booking/(:segment)/reschedule',              'BookingController::reschedule/$1');
 
