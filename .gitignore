@@ -1,51 +1,37 @@
-# CodeIgniter 4
+#-------------------------
+# Secrets — NEVER commit
+#-------------------------
+.env
+.env.*
+!.env.example
+
+#-------------------------
+# Runtime / generated
+#-------------------------
 writable/cache/*
+!writable/cache/index.html
 writable/logs/*
+!writable/logs/index.html
 writable/session/*
 writable/uploads/*
 writable/debugbar/*
-!writable/cache/index.html
-!writable/logs/index.html
-!writable/session/index.html
-!writable/uploads/index.html
-!writable/debugbar/index.html
+writable/temp/*
 
-# Environment
-.env
-.env.local
-.env.*.local
+#-------------------------
+# Dependencies
+#-------------------------
+/vendor/
+/node_modules/
 
-# Composer
-vendor/
-composer.lock
-
-# IDE
+#-------------------------
+# Tooling / OS
+#-------------------------
+.php-cs-fixer.cache
+.phpunit.cache
+phpunit.xml
+/build/
 .idea/
 .vscode/
-*.swp
-*.swo
-*~
 .DS_Store
-
-# OS
 Thumbs.db
-desktop.ini
-
-# Node (if using frontend build tools)
-node_modules/
-npm-debug.log
-yarn-error.log
-
-# Build artifacts
-public/build/
-.gstack/
-
-# Runtime data leaked into public/ during dev
-public/writable/
-public/test_db.php
-
-# Audit docs with secret fragments — keep local, don't push public
-SECURITY-AUDIT.md
-
-# Local-only dev clutter: QA screenshots/logs, planning docs, ad-hoc scripts
-_local/
+*.log

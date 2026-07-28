@@ -8,11 +8,15 @@ class AddBusinessPhone extends Migration
 {
     public function up()
     {
-        $this->db->query("ALTER TABLE whatsapp_config ADD COLUMN IF NOT EXISTS business_phone VARCHAR(30) NULL AFTER phone_number_id");
+        if (! $this->db->fieldExists('business_phone', 'whatsapp_config')) {
+            $this->db->query("ALTER TABLE whatsapp_config ADD COLUMN business_phone VARCHAR(30) NULL AFTER phone_number_id");
+        }
     }
 
     public function down()
     {
-        $this->db->query("ALTER TABLE whatsapp_config DROP COLUMN IF EXISTS business_phone");
+        if ($this->db->fieldExists('business_phone', 'whatsapp_config')) {
+            $this->db->query("ALTER TABLE whatsapp_config DROP COLUMN business_phone");
+        }
     }
 }

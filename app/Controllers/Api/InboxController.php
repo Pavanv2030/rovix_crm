@@ -67,7 +67,13 @@ class InboxController extends BaseController
         $replyWamids   = array_values(array_unique(array_filter(array_column($messages, 'reply_to_message_id'))));
         $quotedByWamid = [];
         if ($replyWamids) {
-            foreach ($messageModel->whereIn('whatsapp_message_id', $replyWamids)->findAll() as $q) {
+            // Explicit account_id — 2nd query on $messageModel, so BaseModel's
+            // scope no longer applies. See InboxController::view().
+            $quoted = $messageModel
+                ->whereIn('whatsapp_message_id', $replyWamids)
+                ->where('account_id', session('account_id'))
+                ->findAll();
+            foreach ($quoted as $q) {
                 $quotedByWamid[$q['whatsapp_message_id']] = $q;
             }
         }

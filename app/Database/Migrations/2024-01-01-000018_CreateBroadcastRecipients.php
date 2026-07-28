@@ -16,6 +16,9 @@ class CreateBroadcastRecipients extends Migration
             'status'              => ['type' => 'ENUM', 'constraint' => ['pending', 'sent', 'delivered', 'read', 'replied', 'failed'], 'default' => 'pending'],
             'whatsapp_message_id' => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
             'error_message'       => ['type' => 'TEXT', 'null' => true],
+            'sent_at'             => ['type' => 'DATETIME', 'null' => true],
+            'delivered_at'        => ['type' => 'DATETIME', 'null' => true],
+            'read_at'             => ['type' => 'DATETIME', 'null' => true],
             'created_at'          => ['type' => 'DATETIME', 'null' => true],
             'updated_at'          => ['type' => 'DATETIME', 'null' => true],
         ]);

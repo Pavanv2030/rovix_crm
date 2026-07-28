@@ -676,7 +676,7 @@ class FlowEngine
             \Config\Database::connect()
                 ->table('conversations')
                 ->where('id', $conversationId)
-                ->set(['assigned_to' => $assignTo, 'status' => 'open'])
+                ->set(['assigned_agent_id' => $assignTo, 'status' => 'open'])
                 ->update();
         }
 
@@ -1213,7 +1213,9 @@ class FlowEngine
         $startNode = $this->nodeModel->where('flow_id', $targetFlow['id'])->where('node_type', 'start')->first();
         if ($startNode) {
             $targetRun = $this->runModel->find($targetRunId);
-            $this->executeNode($targetRun, $startNode, $conversationId);
+            if ($targetRun) {
+                $this->executeNode($targetRun, $startNode, null, $conversationId);
+            }
         }
     }
 
@@ -1262,7 +1264,9 @@ class FlowEngine
                 $token,
                 $contact['phone_normalized'],
                 $template['name'],
-                $template['language_code'] ?? 'en',
+                // Column is `language`, not `language_code` — the old key never
+                // existed, so every flow template silently fell back to 'en'.
+                $template['language'] ?? 'en',
                 $params
             );
             $this->logNonTextMessageToInbox($conversationId, 'template', 'Template: ' . $template['name'], $response['messages'][0]['id'] ?? null, '[Template]');

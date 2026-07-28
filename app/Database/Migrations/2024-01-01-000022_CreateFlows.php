@@ -13,11 +13,13 @@ class CreateFlows extends Migration
             'id'              => ['type' => 'CHAR', 'constraint' => 36],
             'account_id'      => ['type' => 'CHAR', 'constraint' => 36, 'null' => false],
             'name'            => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => false],
-            'is_active'       => ['type' => 'TINYINT', 'constraint' => 1, 'default' => 0],
-            'trigger_keywords'=> ['type' => 'JSON', 'null' => true],
-            'execution_count' => ['type' => 'INT', 'default' => 0],
-            'created_at'      => ['type' => 'DATETIME', 'null' => true],
-            'updated_at'      => ['type' => 'DATETIME', 'null' => true],
+            'is_active'              => ['type' => 'TINYINT', 'constraint' => 1, 'default' => 0],
+            'trigger_keywords'       => ['type' => 'JSON', 'null' => true],
+            'trigger_type'           => ['type' => 'VARCHAR', 'constraint' => 50, 'null' => false, 'default' => 'keyword'],
+            'ai_intent_description'  => ['type' => 'TEXT', 'null' => true],
+            'execution_count'        => ['type' => 'INT', 'default' => 0],
+            'created_at'             => ['type' => 'DATETIME', 'null' => true],
+            'updated_at'             => ['type' => 'DATETIME', 'null' => true],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addForeignKey('account_id', 'accounts', 'id', 'CASCADE', 'CASCADE');

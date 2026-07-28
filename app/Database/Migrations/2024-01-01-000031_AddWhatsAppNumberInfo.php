@@ -8,25 +8,37 @@ class AddWhatsAppNumberInfo extends Migration
 {
     public function up()
     {
-        $this->db->query("ALTER TABLE whatsapp_config
-            ADD COLUMN IF NOT EXISTS display_phone_number VARCHAR(30)  NULL DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS verified_name        VARCHAR(255) NULL DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS quality_rating       VARCHAR(20)  NULL DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS name_status          VARCHAR(50)  NULL DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS account_mode         VARCHAR(20)  NULL DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS number_info_fetched_at DATETIME  NULL DEFAULT NULL
-        ");
+        $columns = [
+            'display_phone_number'   => "VARCHAR(30)  NULL DEFAULT NULL",
+            'verified_name'          => "VARCHAR(255) NULL DEFAULT NULL",
+            'quality_rating'         => "VARCHAR(20)  NULL DEFAULT NULL",
+            'name_status'            => "VARCHAR(50)  NULL DEFAULT NULL",
+            'account_mode'           => "VARCHAR(20)  NULL DEFAULT NULL",
+            'number_info_fetched_at' => "DATETIME  NULL DEFAULT NULL",
+        ];
+
+        foreach ($columns as $name => $definition) {
+            if (! $this->db->fieldExists($name, 'whatsapp_config')) {
+                $this->db->query("ALTER TABLE whatsapp_config ADD COLUMN {$name} {$definition}");
+            }
+        }
     }
 
     public function down()
     {
-        $this->db->query("ALTER TABLE whatsapp_config
-            DROP COLUMN IF EXISTS display_phone_number,
-            DROP COLUMN IF EXISTS verified_name,
-            DROP COLUMN IF EXISTS quality_rating,
-            DROP COLUMN IF EXISTS name_status,
-            DROP COLUMN IF EXISTS account_mode,
-            DROP COLUMN IF EXISTS number_info_fetched_at
-        ");
+        $columns = [
+            'display_phone_number',
+            'verified_name',
+            'quality_rating',
+            'name_status',
+            'account_mode',
+            'number_info_fetched_at',
+        ];
+
+        foreach ($columns as $name) {
+            if ($this->db->fieldExists($name, 'whatsapp_config')) {
+                $this->db->query("ALTER TABLE whatsapp_config DROP COLUMN {$name}");
+            }
+        }
     }
 }

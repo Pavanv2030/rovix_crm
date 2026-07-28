@@ -16,13 +16,19 @@ class CreateContacts extends Migration
             'name'             => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
             'email'            => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
             'company'          => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
-            'avatar_url'       => ['type' => 'VARCHAR', 'constraint' => 500, 'null' => true],
-            'created_at'       => ['type' => 'DATETIME', 'null' => true],
-            'updated_at'       => ['type' => 'DATETIME', 'null' => true],
+            'avatar_url'        => ['type' => 'VARCHAR', 'constraint' => 500, 'null' => true],
+            'channel'           => ['type' => 'VARCHAR', 'constraint' => 100, 'null' => true],
+            'vertical'          => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
+            'status'            => ['type' => 'VARCHAR', 'constraint' => 50, 'null' => true, 'default' => 'New'],
+            'assigned_agent_id' => ['type' => 'CHAR', 'constraint' => 36, 'null' => true],
+            'follow_up_date'    => ['type' => 'DATE', 'null' => true],
+            'created_at'        => ['type' => 'DATETIME', 'null' => true],
+            'updated_at'        => ['type' => 'DATETIME', 'null' => true],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey(['account_id', 'phone_normalized']);
         $this->forge->addKey('account_id');
+        $this->forge->addKey('assigned_agent_id');
         $this->forge->addForeignKey('account_id', 'accounts', 'id', 'CASCADE', 'CASCADE');
         $this->forge->createTable('contacts');
     }

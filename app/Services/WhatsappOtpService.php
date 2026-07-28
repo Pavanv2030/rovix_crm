@@ -36,10 +36,11 @@ class WhatsappOtpService
         $model = new OtpVerificationModel();
 
         // Remove any existing pending OTPs for this number
-        $model->deleteUnverifiedForPhone($phone);
+        $model->deleteUnverifiedForPhone($phone, $accountId);
 
         $model->insert([
             'id'           => generate_uuid(),
+            'account_id'   => $accountId,
             'phone_number' => $phone,
             'otp_code'     => $otp,
             'is_verified'  => 0,
@@ -69,7 +70,7 @@ class WhatsappOtpService
 
         if (!empty($result['error'])) {
             // Clean up the stored OTP since send failed
-            $model->deleteUnverifiedForPhone($phone);
+            $model->deleteUnverifiedForPhone($phone, $accountId);
             $errMsg = $result['error']['message'] ?? 'Failed to send OTP via WhatsApp.';
             return ['success' => false, 'message' => $errMsg];
         }
@@ -80,10 +81,10 @@ class WhatsappOtpService
     /**
      * Verify a submitted OTP. Returns ['success' => bool, 'message' => string].
      */
-    public function verifyOtp(string $phone, string $submittedOtp): array
+    public function verifyOtp(string $phone, string $submittedOtp, string $accountId): array
     {
         $model  = new OtpVerificationModel();
-        $record = $model->getLatestForPhone($phone);
+        $record = $model->getLatestForPhone($phone, $accountId);
 
         if (!$record) {
             return ['success' => false, 'message' => 'No OTP found for this number. Please request a new one.'];
@@ -97,7 +98,7 @@ class WhatsappOtpService
             return ['success' => false, 'message' => 'Too many incorrect attempts. Please request a new OTP.'];
         }
 
-        if ($record['otp_code'] !== trim($submittedOtp)) {
+        if (!hash_equals($record['otp_code'], trim($submittedOtp))) {
             $model->update($record['id'], ['attempts' => (int) $record['attempts'] + 1]);
             $remaining = 3 - ((int) $record['attempts'] + 1);
             return [

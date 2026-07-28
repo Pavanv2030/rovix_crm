@@ -152,6 +152,7 @@ class TeamController extends BaseController
         ProfileModel::setBypassAccountScope(false);
 
         AccountInvitationModel::setBypassAccountScope(true);
+        $inviteModel = new AccountInvitationModel();
         $inviteModel->update($invite['id'], [
             'accepted_at'         => date('Y-m-d H:i:s'),
             'accepted_by_user_id' => $userId,

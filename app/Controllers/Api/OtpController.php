@@ -27,20 +27,23 @@ class OtpController extends BaseController
             return $this->jsonError('Invalid phone number format. Use digits only, 10–15 chars (e.g. 919876543210).', 422);
         }
 
-        // Rate limit: one OTP per 60 seconds per number
+        $accountId = session('account_id');
+        if (!$accountId) {
+            return $this->jsonError('Authentication required.', 401);
+        }
+
+        // Rate limit: one OTP per 60 seconds per number, per account. Scoping
+        // by account_id matters — an unscoped lookup here disclosed that some
+        // other tenant had messaged this number, and when.
         $model  = new OtpVerificationModel();
-        $recent = $model->where('phone_number', $phone)
+        $recent = $model->where('account_id', $accountId)
+            ->where('phone_number', $phone)
             ->where('created_at >=', date('Y-m-d H:i:s', strtotime('-60 seconds')))
             ->first();
 
         if ($recent) {
             $wait = 60 - (time() - strtotime($recent['created_at']));
             return $this->jsonError("Please wait {$wait} second(s) before requesting another OTP.", 429);
-        }
-
-        $accountId = session('account_id');
-        if (!$accountId) {
-            return $this->jsonError('Authentication required.', 401);
         }
 
         $service = new WhatsappOtpService();
@@ -77,8 +80,13 @@ class OtpController extends BaseController
             return $this->jsonError('OTP must be exactly 6 digits.', 422);
         }
 
+        $accountId = session('account_id');
+        if (!$accountId) {
+            return $this->jsonError('Authentication required.', 401);
+        }
+
         $service = new WhatsappOtpService();
-        $result  = $service->verifyOtp($phone, $otp);
+        $result  = $service->verifyOtp($phone, $otp, $accountId);
 
         if (!$result['success']) {
             return $this->response->setStatusCode(422)->setJSON([

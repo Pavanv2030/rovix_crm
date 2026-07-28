@@ -51,19 +51,34 @@ class DealsController extends BaseController
         $pipelineId = $this->request->getPost('pipeline_id');
         $stageId    = $this->request->getPost('stage_id');
 
-        if (empty($title) || empty($pipelineId) || empty($stageId)) {
-            return redirect()->back()->withInput()->with('error', 'Title, pipeline and stage are required.');
+        // deals.contact_id is NOT NULL (migration 2026-07-06-000001), so a deal
+        // must always be linked to a contact.
+        $contactId = $this->request->getPost('contact_id') ?: null;
+
+        if (empty($title) || empty($pipelineId) || empty($stageId) || empty($contactId)) {
+            return redirect()->back()->withInput()->with('error', 'Title, pipeline, stage and contact are required.');
         }
 
         $pipeline = (new PipelineModel())->find($pipelineId);
         if (!$pipeline) return redirect()->back()->with('error', 'Invalid pipeline.');
+
+        $contact = (new ContactModel())->find($contactId);
+        if (!$contact) return redirect()->back()->withInput()->with('error', 'Invalid contact.');
+
+        // stage_id comes straight from POST — confirm it belongs to the chosen
+        // pipeline (which is already account-scoped), or a deal can be filed
+        // into another tenant's stage.
+        $stage = (new \App\Models\PipelineStageModel())->find($stageId);
+        if (!$stage || $stage['pipeline_id'] !== $pipelineId) {
+            return redirect()->back()->withInput()->with('error', 'Invalid stage.');
+        }
 
         $dealModel = new DealModel();
         $dealId    = $dealModel->insert([
             'account_id'          => session('account_id'),
             'pipeline_id'         => $pipelineId,
             'stage_id'            => $stageId,
-            'contact_id'          => $this->request->getPost('contact_id') ?: null,
+            'contact_id'          => $contactId,
             'title'               => $title,
             'value'               => (float)($this->request->getPost('value') ?? 0),
             'currency'            => $this->request->getPost('currency') ?? 'INR',
@@ -129,16 +144,39 @@ class DealsController extends BaseController
         $deal      = $dealModel->find($dealId);
         if (!$deal) return redirect()->to(base_url('pipelines'))->with('error', 'Deal not found.');
 
-        $pipelineId = $this->request->getPost('pipeline_id');
-        if ($pipelineId && !(new PipelineModel())->find($pipelineId)) {
+        // pipeline_id is NOT NULL — keep the existing one if none was submitted,
+        // rather than writing NULL into the column.
+        $pipelineId = $this->request->getPost('pipeline_id') ?: null;
+        if ($pipelineId === null) {
+            $pipelineId = $deal['pipeline_id'];
+        } elseif (!(new PipelineModel())->find($pipelineId)) {
             return redirect()->back()->withInput()->with('error', 'Invalid pipeline.');
+        }
+
+        // contact_id is NOT NULL — keep the existing link if none was submitted.
+        $contactId = $this->request->getPost('contact_id') ?: null;
+        if ($contactId === null) {
+            $contactId = $deal['contact_id'];
+        } elseif (!(new ContactModel())->find($contactId)) {
+            return redirect()->back()->withInput()->with('error', 'Invalid contact.');
+        }
+
+        // Confirm the stage belongs to the pipeline (which is account-scoped).
+        $stageId = $this->request->getPost('stage_id') ?: null;
+        if ($stageId === null) {
+            $stageId = $deal['stage_id'];
+        } else {
+            $stage = (new \App\Models\PipelineStageModel())->find($stageId);
+            if (!$stage || $stage['pipeline_id'] !== $pipelineId) {
+                return redirect()->back()->withInput()->with('error', 'Invalid stage.');
+            }
         }
 
         $dealModel->update($dealId, [
             'title'               => trim($this->request->getPost('title')),
             'pipeline_id'         => $pipelineId,
-            'stage_id'            => $this->request->getPost('stage_id'),
-            'contact_id'          => $this->request->getPost('contact_id') ?: null,
+            'stage_id'            => $stageId,
+            'contact_id'          => $contactId,
             'value'               => (float)($this->request->getPost('value') ?? 0),
             'currency'            => $this->request->getPost('currency') ?? 'INR',
             'expected_close_date' => $this->request->getPost('expected_close_date') ?: null,

@@ -252,14 +252,26 @@ class AuthController extends BaseController
         $link = base_url('reset-password/' . $token);
 
         try {
+            $config = config('Email');
+            if (empty($config->fromEmail)) {
+                log_message('error', 'Password reset email not sent: email.fromEmail is not configured in .env');
+
+                return;
+            }
+
             $emailService = \Config\Services::email();
+            $emailService->setFrom($config->fromEmail, $config->fromName ?: 'Rovix CRM');
             $emailService->setTo($email);
             $emailService->setSubject('Reset your Rovix CRM password');
             $emailService->setMessage(
                 '<p>Click the link below to reset your password. This link expires in 1 hour.</p>'
                 . '<p><a href="' . esc($link) . '">' . esc($link) . '</a></p>'
             );
-            $emailService->send();
+            $emailService->setMailType('html');
+
+            if (! $emailService->send(false)) {
+                log_message('error', 'Password reset email failed: ' . $emailService->printDebugger(['headers']));
+            }
         } catch (\Throwable $e) {
             log_message('error', 'Password reset email failed: ' . $e->getMessage());
         }

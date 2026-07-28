@@ -109,21 +109,36 @@ class FlowsController extends BaseController
             return $this->response->setStatusCode(422)->setJSON(['error' => 'AI intent description is required.']);
         }
 
-        if (!$flowData) {
+        // A payload of ['drawflow' => ['Home' => ['data' => []]]] is truthy, so
+        // !$flowData alone would let an empty canvas through and create a flow
+        // with zero nodes.
+        if (!$flowData || empty($flowData['drawflow']['Home']['data'] ?? [])) {
             return $this->response->setStatusCode(422)->setJSON(['error' => 'Flow canvas is empty.']);
         }
 
-        $flowModel = new FlowModel();
-        $flowId    = $flowModel->insert([
-            'name'                  => $name,
-            'is_active'             => $isActive,
-            'trigger_type'          => $triggerType,
-            'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
-            'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
-            'execution_count'       => 0,
-        ]);
+        $db = \Config\Database::connect();
+        $db->transBegin();
 
-        $this->saveNodes($flowId, $flowData);
+        try {
+            $flowModel = new FlowModel();
+            $flowId    = $flowModel->insert([
+                'name'                  => $name,
+                'is_active'             => $isActive,
+                'trigger_type'          => $triggerType,
+                'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
+                'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
+                'execution_count'       => 0,
+            ]);
+
+            $this->saveNodes($flowId, $flowData);
+
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+            log_message('error', '[Flows] Create failed: ' . $e->getMessage());
+
+            return $this->response->setStatusCode(500)->setJSON(['error' => 'Could not create the flow.']);
+        }
 
         return $this->response->setJSON(['success' => true, 'flow_id' => $flowId]);
     }
@@ -192,17 +207,40 @@ class FlowsController extends BaseController
             return $this->response->setStatusCode(422)->setJSON(['error' => 'AI intent description is required.']);
         }
 
-        $flowModel->update($flowId, [
-            'name'                  => $name,
-            'is_active'             => $isActive,
-            'trigger_type'          => $triggerType,
-            'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
-            'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
-        ]);
+        // Refuse to wipe a flow's nodes for an empty canvas — this used to
+        // delete every node, re-insert nothing, and still return success.
+        if ($flowData && empty($flowData['drawflow']['Home']['data'] ?? [])) {
+            return $this->response->setStatusCode(422)->setJSON([
+                'error' => 'The flow canvas is empty. Add at least one node before saving.',
+            ]);
+        }
 
-        if ($flowData) {
-            (new FlowNodeModel())->where('flow_id', $flowId)->delete();
-            $this->saveNodes($flowId, $flowData);
+        // The flow row and its nodes must move together: without a transaction
+        // a failure between the delete and the re-insert leaves an active flow
+        // with zero nodes.
+        $db = \Config\Database::connect();
+        $db->transBegin();
+
+        try {
+            $flowModel->update($flowId, [
+                'name'                  => $name,
+                'is_active'             => $isActive,
+                'trigger_type'          => $triggerType,
+                'trigger_keywords'      => $triggerType === 'keyword' ? json_encode(array_values($keywords)) : json_encode([]),
+                'ai_intent_description' => $triggerType === 'ai_intent' ? $aiIntentDesc : null,
+            ]);
+
+            if ($flowData) {
+                (new FlowNodeModel())->where('flow_id', $flowId)->delete();
+                $this->saveNodes($flowId, $flowData);
+            }
+
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+            log_message('error', '[Flows] Update failed for ' . $flowId . ': ' . $e->getMessage());
+
+            return $this->response->setStatusCode(500)->setJSON(['error' => 'Could not save the flow. No changes were made.']);
         }
 
         // Audit trail
@@ -227,9 +265,21 @@ class FlowsController extends BaseController
         $flow = $flowModel->find($flowId);
         if (!$flow) return redirect()->to(base_url('flows'))->with('error', 'Flow not found.');
 
-        (new FlowNodeModel())->where('flow_id', $flowId)->delete();
-        (new FlowRunModel())->where('flow_id', $flowId)->delete();
-        $flowModel->delete($flowId);
+        $db = \Config\Database::connect();
+        $db->transBegin();
+
+        try {
+            (new FlowNodeModel())->where('flow_id', $flowId)->delete();
+            (new FlowRunModel())->where('flow_id', $flowId)->delete();
+            $flowModel->delete($flowId);
+
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+            log_message('error', '[Flows] Delete failed for ' . $flowId . ': ' . $e->getMessage());
+
+            return redirect()->to(base_url('flows'))->with('error', 'Could not delete the flow.');
+        }
 
         return redirect()->to(base_url('flows'))->with('success', 'Flow deleted.');
     }

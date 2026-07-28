@@ -139,8 +139,23 @@ class PipelinesController extends BaseController
         $pipeline = (new PipelineModel())->find($pipelineId);
         if (!$pipeline) return redirect()->to(base_url('pipelines'))->with('error', 'Pipeline not found.');
 
+        // deals.pipeline_id is NOT NULL, so the old "orphan the deals" approach
+        // could never work — it wrote NULL into a NOT NULL column.
         $db = \Config\Database::connect();
-        $db->table('deals')->where('pipeline_id', $pipelineId)->update(['pipeline_id' => null, 'stage_id' => null]);
+
+        $dealCount = $db->table('deals')
+            ->where('pipeline_id', $pipelineId)
+            ->where('account_id', session('account_id'))
+            ->countAllResults();
+
+        if ($dealCount > 0) {
+            return redirect()->to(base_url('pipelines'))->with(
+                'error',
+                'Cannot delete this pipeline — ' . $dealCount . ' deal' . ($dealCount > 1 ? 's are' : ' is')
+                . ' still in it. Move or delete them first.'
+            );
+        }
+
         (new PipelineModel())->delete($pipelineId);
 
         return redirect()->to(base_url('pipelines'))->with('success', 'Pipeline deleted.');

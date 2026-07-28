@@ -15,6 +15,35 @@ use App\Libraries\WhatsApp\PhoneUtils;
 
 class ContactsController extends BaseController
 {
+    /**
+     * Returns only the ids from $ids that belong to the current account.
+     *
+     * Validating ids one-by-one with $model->find() inside a loop is unsafe:
+     * BaseModel applies its account_id scope in initialize(), but the query
+     * builder resets its WHERE clauses after each get(), so only the FIRST
+     * find() on a given instance is tenant-scoped. This does it in a single
+     * explicitly-scoped query instead.
+     *
+     * @param  string[] $ids
+     * @return string[]
+     */
+    private function filterOwnedIds(\App\Models\BaseModel $model, array $ids): array
+    {
+        $ids = array_values(array_filter(array_map('strval', $ids), static fn ($id) => $id !== ''));
+        if (!$ids) {
+            return [];
+        }
+
+        $rows = $model->builder()
+            ->select('id')
+            ->whereIn('id', $ids)
+            ->where('account_id', session('account_id'))
+            ->get()
+            ->getResultArray();
+
+        return array_column($rows, 'id');
+    }
+
     public function index()
     {
         $db = \Config\Database::connect();
@@ -184,12 +213,9 @@ class ContactsController extends BaseController
         // Tags (only tags owned by this account)
         $tagIds = $this->request->getPost('tag_ids') ?? [];
         if ($tagIds) {
-            $ctModel  = new ContactTagModel();
-            $tagModel = new \App\Models\TagModel();
-            foreach ($tagIds as $tagId) {
-                if ($tagModel->find($tagId)) {
-                    $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
-                }
+            $ctModel = new ContactTagModel();
+            foreach ($this->filterOwnedIds(new \App\Models\TagModel(), $tagIds) as $tagId) {
+                $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
             }
         }
 
@@ -197,11 +223,9 @@ class ContactsController extends BaseController
         $customValues = $this->request->getPost('custom_fields') ?? [];
         if ($customValues) {
             $cfvModel = new ContactCustomValueModel();
-            $customFieldModel = new \App\Models\CustomFieldModel();
-            foreach ($customValues as $fieldId => $value) {
-                if (!$customFieldModel->find($fieldId)) {
-                    continue;
-                }
+            $ownedFieldIds = $this->filterOwnedIds(new \App\Models\CustomFieldModel(), array_keys($customValues));
+            foreach ($ownedFieldIds as $fieldId) {
+                $value = $customValues[$fieldId];
                 if ($value !== '' && $value !== null) {
                     $cfvModel->insert(['contact_id' => $contactId, 'custom_field_id' => $fieldId, 'value' => $value]);
                 }
@@ -270,24 +294,19 @@ class ContactsController extends BaseController
         ]);
 
         // Sync tags — delete all then re-insert (only tags owned by this account)
-        $ctModel  = new ContactTagModel();
-        $tagModel = new \App\Models\TagModel();
+        $ctModel = new ContactTagModel();
         $ctModel->where('contact_id', $contactId)->delete();
         $tagIds = $this->request->getPost('tag_ids') ?? [];
-        foreach ($tagIds as $tagId) {
-            if ($tagModel->find($tagId)) {
-                $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
-            }
+        foreach ($this->filterOwnedIds(new \App\Models\TagModel(), $tagIds) as $tagId) {
+            $ctModel->insert(['contact_id' => $contactId, 'tag_id' => $tagId]);
         }
 
         // Sync custom fields
         $cfvModel     = new ContactCustomValueModel();
         $customValues = $this->request->getPost('custom_fields') ?? [];
-        $customFieldModel = new \App\Models\CustomFieldModel();
-        foreach ($customValues as $fieldId => $value) {
-            if (!$customFieldModel->find($fieldId)) {
-                continue;
-            }
+        $ownedFieldIds = $this->filterOwnedIds(new \App\Models\CustomFieldModel(), array_keys($customValues));
+        foreach ($ownedFieldIds as $fieldId) {
+            $value = $customValues[$fieldId];
             $existing = $cfvModel->where('contact_id', $contactId)->where('custom_field_id', $fieldId)->first();
             if ($existing) {
                 if ($value !== '') {
@@ -314,12 +333,38 @@ class ContactsController extends BaseController
             return redirect()->to(base_url('contacts'))->with('error', 'Contact not found.');
         }
 
+        // conversations.contact_id and deals.contact_id are NOT NULL with
+        // ON DELETE RESTRICT (migration 2026-07-06-000001), so linked history
+        // must be dealt with by the user rather than orphaned or cascaded away.
         $db = \Config\Database::connect();
-        // SET NULL on conversations and deals
-        $db->table('conversations')->where('contact_id', $contactId)->update(['contact_id' => null]);
-        $db->table('deals')->where('contact_id', $contactId)->update(['contact_id' => null]);
 
-        // Delete contact (FK CASCADE handles contact_tags, contact_custom_values, contact_notes)
+        $conversationCount = $db->table('conversations')
+            ->where('contact_id', $contactId)
+            ->where('account_id', session('account_id'))
+            ->countAllResults();
+
+        $dealCount = $db->table('deals')
+            ->where('contact_id', $contactId)
+            ->where('account_id', session('account_id'))
+            ->countAllResults();
+
+        if ($conversationCount > 0 || $dealCount > 0) {
+            $parts = [];
+            if ($conversationCount > 0) {
+                $parts[] = $conversationCount . ' conversation' . ($conversationCount > 1 ? 's' : '');
+            }
+            if ($dealCount > 0) {
+                $parts[] = $dealCount . ' deal' . ($dealCount > 1 ? 's' : '');
+            }
+
+            return redirect()->to(base_url('contacts'))->with(
+                'error',
+                'Cannot delete this contact — it still has ' . implode(' and ', $parts)
+                . '. Delete or reassign those first.'
+            );
+        }
+
+        // FK CASCADE handles contact_tags, contact_custom_values, contact_notes.
         (new ContactModel())->delete($contactId);
 
         return redirect()->to(base_url('contacts'))->with('success', 'Contact deleted.');

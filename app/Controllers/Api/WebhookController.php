@@ -35,9 +35,17 @@ class WebhookController extends BaseController
         $hubToken     = $params['hub.verify_token'] ?? '';
         $hubChallenge = $params['hub.challenge'] ?? '';
 
-        $verifyToken = config('WhatsApp')->verifyToken;
+        $verifyToken = (string) (config('WhatsApp')->verifyToken ?? '');
 
-        if ($hubMode === 'subscribe' && $hubToken === $verifyToken) {
+        // Fail closed: a blank configured token must never verify, or anyone
+        // sending an empty hub.verify_token could register the webhook.
+        if ($verifyToken === '') {
+            log_message('error', 'Webhook verification failed: whatsapp.verifyToken is not configured');
+
+            return $this->response->setStatusCode(403)->setJSON(['error' => 'Verification failed']);
+        }
+
+        if ($hubMode === 'subscribe' && hash_equals($verifyToken, $hubToken)) {
             log_message('info', 'Webhook verified successfully');
             return $this->response->setContentType('text/plain')->setBody($hubChallenge);
         }

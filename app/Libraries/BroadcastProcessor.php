@@ -194,11 +194,13 @@ class BroadcastProcessor
         $db = \Config\Database::connect();
         $db->table('broadcasts')
             ->where('id', $broadcastId)
+            // 3rd arg is $escape — passing false as the 2nd arg is ignored for
+            // array keys and leaves these bound as literal strings.
             ->set([
                 'sent_count' => 'sent_count + ' . (int)$results['sent'],
                 'failed_count' => 'failed_count + ' . (int)$results['failed'],
                 'updated_at' => 'NOW()'
-            ], false) // false = don't escape SQL functions
+            ], null, false)
             ->update();
 
         return $results;

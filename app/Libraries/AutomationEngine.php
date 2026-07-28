@@ -418,7 +418,7 @@ class AutomationEngine
         $db->table('conversations')
             ->where('contact_id', $contact['id'])
             ->where('account_id', $automation['account_id'])
-            ->set(['assigned_to' => $userId])
+            ->set(['assigned_agent_id' => $userId])
             ->update();
         return ['outcome' => 'done'];
     }
@@ -441,14 +441,26 @@ class AutomationEngine
         $stageId = $config['stage_id'] ?? null;
         if (!$stageId) return ['outcome' => 'skipped_no_stage'];
 
+        // deals.pipeline_id is NOT NULL, so resolve it from the chosen stage.
+        // pipeline_stages has no account_id — tenancy is enforced via its pipeline.
+        $stage = (new \App\Models\PipelineStageModel())->find($stageId);
+        if (!$stage) return ['outcome' => 'skipped_bad_stage'];
+
+        $pipeline = (new \App\Models\PipelineModel())
+            ->where('id', $stage['pipeline_id'])
+            ->where('account_id', $automation['account_id'])
+            ->first();
+
+        if (!$pipeline) return ['outcome' => 'skipped_bad_stage'];
+
         (new \App\Models\DealModel())->insert([
-            'account_id' => $automation['account_id'],
-            'contact_id' => $contact['id'],
-            'stage_id'   => $stageId,
-            'name'       => $this->interpolate($config['name'] ?? 'Deal — ' . $contact['name'], $contact),
-            'value'      => (float)($config['value'] ?? 0),
-            'status'     => 'open',
-            'created_at' => date('Y-m-d H:i:s'),
+            'account_id'  => $automation['account_id'],
+            'pipeline_id' => $stage['pipeline_id'],
+            'contact_id'  => $contact['id'],
+            'stage_id'    => $stageId,
+            'title'       => $this->interpolate($config['name'] ?? 'Deal — ' . $contact['name'], $contact),
+            'value'       => (float)($config['value'] ?? 0),
+            'status'      => 'open',
         ]);
 
         return ['outcome' => 'done'];
@@ -508,8 +520,10 @@ class AutomationEngine
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 10,
         ]);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        // curl_getinfo must run AFTER curl_exec — reading it first always
+        // returned 0, so every webhook step reported webhook_error.
         curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
         return ['outcome' => ($code >= 200 && $code < 300) ? 'done' : 'webhook_error', 'http_code' => $code];

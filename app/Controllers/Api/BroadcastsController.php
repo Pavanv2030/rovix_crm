@@ -117,7 +117,15 @@ class BroadcastsController extends BaseController
 
         foreach ($numbers as $num) {
             $normalized = PhoneUtils::normalize($num);
-            $contact    = $normalized ? $contactModel->where('phone_normalized', $normalized)->first() : null;
+            // account_id stated explicitly: from the 2nd iteration onward this
+            // is a reused model instance, so BaseModel's scope is gone and the
+            // "not in your contacts" gate would match other tenants' contacts.
+            $contact = $normalized
+                ? $contactModel
+                    ->where('phone_normalized', $normalized)
+                    ->where('account_id', session('account_id'))
+                    ->first()
+                : null;
 
             if (!$contact) {
                 $rejected[] = "$num: not in your contacts";

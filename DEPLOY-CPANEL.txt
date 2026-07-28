@@ -1,0 +1,94 @@
+====================================================================
+ ROVIX CRM — cPanel Deployment Guide (for the production team)
+ Stack: CodeIgniter 4 · PHP 8.2 · MySQL   (NO Docker required)
+====================================================================
+
+This package contains ONLY runtime files. Dev-only files (node_modules,
+tests, Docker, build tooling) have been removed. vendor/ IS included, so
+Composer is NOT needed on the server.
+
+--------------------------------------------------------------------
+STEP 1 — PHP
+--------------------------------------------------------------------
+- cPanel > MultiPHP Manager: set the domain to PHP 8.2.
+- cPanel > PHP Extensions / Selector: enable
+    intl, mbstring, mysqli, curl, gd, fileinfo, sodium
+
+--------------------------------------------------------------------
+STEP 2 — DATABASE
+--------------------------------------------------------------------
+- cPanel > MySQL Databases: create a database + user, assign user to DB
+  (names are auto-prefixed, e.g. cpaneluser_rovix).
+- Note the DB name, username, password for STEP 4.
+
+--------------------------------------------------------------------
+STEP 3 — UPLOAD
+--------------------------------------------------------------------
+Choose ONE layout:
+
+ (A) PREFERRED — you CAN set the document root:
+     - Upload the whole package to e.g.  /home/cpaneluser/rovix-crm
+     - Point the domain's Document Root to  .../rovix-crm/public
+     - Edit public/.htaccess: change  RewriteBase /rovix-crm/public/
+       to  RewriteBase /
+     - DELETE the root .htaccess included here (only needed for layout B).
+
+ (B) FALLBACK — you CANNOT change the document root:
+     - Upload the whole package INTO public_html/ (so public_html
+       contains app/, public/, system/, .env, .htaccess ...).
+     - Keep the root .htaccess included here (it routes to public/
+       and blocks direct access to app/, system/, writable/, .env).
+
+--------------------------------------------------------------------
+STEP 4 — CONFIGURE .env
+--------------------------------------------------------------------
+Open .env and fill in every value marked <<< CHANGE >>>:
+  - app.baseURL            = https://yourdomain.com/   (trailing slash!)
+  - database.default.*     = DB name / user / password from STEP 2
+  - session.savePath       = ABSOLUTE path, e.g.
+                             /home/cpaneluser/rovix-crm/writable/session
+  - encryption.key         = generate one (STEP 5)
+
+--------------------------------------------------------------------
+STEP 5 — KEY + MIGRATIONS (needs SSH/Terminal)
+--------------------------------------------------------------------
+  cd <app root>
+  php spark key:generate      # writes encryption.key into .env
+  php spark migrate           # creates all database tables
+
+No SSH? Run these locally, export the MySQL dump, and import it via
+cPanel > phpMyAdmin. The encryption.key must still be set in .env.
+
+--------------------------------------------------------------------
+STEP 6 — PERMISSIONS
+--------------------------------------------------------------------
+  chmod -R 755 writable      (use 775 if the web user needs group write)
+
+--------------------------------------------------------------------
+STEP 7 — CRON JOBS  (REQUIRED — queue/automations won't run without them)
+--------------------------------------------------------------------
+cPanel > Cron Jobs (adjust the php path + app path to your server):
+
+  * * * * * /usr/local/bin/php /home/cpaneluser/rovix-crm/spark queue:process
+  * * * * * /usr/local/bin/php /home/cpaneluser/rovix-crm/spark run:scheduled
+
+NOTE — both MUST run every minute:
+  - The command is  queue:process  (not process:queue).
+  - run:scheduled matches send times to the exact minute. On */5 any daily
+    report or automation not set to a :00/:05/:10 ... minute NEVER fires.
+
+--------------------------------------------------------------------
+STEP 8 — SSL + GO-LIVE CHECK
+--------------------------------------------------------------------
+- cPanel > SSL/TLS Status: run AutoSSL. Keep
+  app.forceGlobalSecureRequests = true in .env once SSL is active.
+- Smoke test: open the site > log in > send one test WhatsApp message.
+- The WhatsApp webhook URL to register in Meta:
+    https://yourdomain.com/api/whatsapp/webhook
+  Use the same whatsapp.verifyToken value from .env as the Verify Token.
+
+====================================================================
+SECURITY NOTE: generate a FRESH encryption.key on the server. Do not
+reuse a key that has ever been shared, or stored WhatsApp tokens can
+be decrypted by anyone holding it.
+====================================================================

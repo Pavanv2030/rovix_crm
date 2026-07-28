@@ -50,11 +50,28 @@ class ProcessQueue extends BaseCommand
 
     private function processJob(array $job, JobQueueModel $model)
     {
-        $model->update($job['id'], [
-            'status'       => 'processing',
-            'locked_until' => date('Y-m-d H:i:s', time() + 300),
-            'attempts'     => $job['attempts'] + 1,
-        ]);
+        // Atomically claim the job. The batch above is SELECTed without a lock,
+        // so a second worker (run:scheduled also invokes queue:process) can hold
+        // the same rows. Only the worker whose UPDATE actually matches a still
+        // -pending row may run it — otherwise the same WhatsApp message is sent
+        // to the customer twice.
+        $db = \Config\Database::connect();
+        $db->table('job_queue')
+            ->where('id', $job['id'])
+            ->where('status', 'pending')
+            ->set('status', 'processing')
+            ->set('locked_until', date('Y-m-d H:i:s', time() + 300))
+            ->set('attempts', 'attempts + 1', false)
+            ->update();
+
+        if ($db->affectedRows() === 0) {
+            CLI::write("Job #{$job['id']} already claimed by another worker — skipping", 'yellow');
+
+            return;
+        }
+
+        // NB: $job['attempts'] intentionally still holds the pre-increment
+        // value — the retry/backoff logic below computes attempts + 1 itself.
 
         $payload = json_decode($job['payload'], true);
 
@@ -116,7 +133,10 @@ class ProcessQueue extends BaseCommand
             $model->update($job['id'], ['status' => 'done', 'locked_until' => null]);
             CLI::write("✓ Job #{$job['id']} completed", 'green');
 
-        } catch (\Exception $e) {
+        // \Throwable, not \Exception: a TypeError/ArgumentCountError in a job
+        // handler is an Error, which would otherwise escape and kill the worker
+        // mid-batch, stranding every remaining job at status='processing'.
+        } catch (\Throwable $e) {
             CLI::write("✗ Job #{$job['id']} failed: " . $e->getMessage(), 'red');
 
             $failedLog   = json_decode($job['failed_attempts_log'] ?? '[]', true);

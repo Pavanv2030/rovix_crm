@@ -9,7 +9,7 @@ class PasswordResetModel extends BaseModel
     protected $allowedFields = ['id', 'profile_id', 'token_hash', 'expires_at', 'used_at', 'created_at'];
     protected $useTimestamps   = false;
 
-    private function hasAccountId(): bool
+    protected function hasAccountId(): bool
     {
         return false;
     }

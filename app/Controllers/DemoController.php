@@ -32,14 +32,19 @@ class DemoController extends BaseController
             $normalized = '91' . $normalized;
         }
 
-        \App\Models\BaseModel::setBypassAccountScope(true);
-
-        $account = (new AccountModel())->first();
+        // setBypassAccountScope is a GLOBAL flag. Every early return below used
+        // to skip the reset, leaving account scoping disabled for the rest of
+        // the request. runUnscoped() resets it in a finally.
+        $account = \App\Models\BaseModel::runUnscoped(
+            static fn () => (new AccountModel())->first()
+        );
         if (!$account) {
             return $this->response->setStatusCode(500)->setJSON(['error' => 'No account']);
         }
 
-        $waConfig = (new WhatsAppConfigModel())->where('account_id', $account['id'])->first();
+        $waConfig = \App\Models\BaseModel::runUnscoped(
+            static fn () => (new WhatsAppConfigModel())->where('account_id', $account['id'])->first()
+        );
         if (!$waConfig || ($waConfig['status'] ?? '') !== 'connected') {
             return $this->response->setStatusCode(500)->setJSON(['error' => 'WhatsApp not connected']);
         }
@@ -106,17 +111,24 @@ class DemoController extends BaseController
         $prefs      = json_decode($account['notification_preferences'] ?? '{}', true) ?? [];
         $templateId = $prefs['daily_report_template_id'] ?? null;
 
-        if ($templateId) {
-            $template = (new MessageTemplateModel())->find($templateId);
-            if ($template) {
-                return $template;
+        // Scoping is bypassed deliberately here (the demo endpoint is public and
+        // has no session), but each lookup is constrained to $account explicitly.
+        return \App\Models\BaseModel::runUnscoped(static function () use ($templateId, $account) {
+            if ($templateId) {
+                $template = (new MessageTemplateModel())
+                    ->where('id', $templateId)
+                    ->where('account_id', $account['id'])
+                    ->first();
+                if ($template) {
+                    return $template;
+                }
             }
-        }
 
-        return (new MessageTemplateModel())
-            ->where('account_id', $account['id'])
-            ->where('status', 'approved')
-            ->orderBy('updated_at', 'DESC')
-            ->first();
+            return (new MessageTemplateModel())
+                ->where('account_id', $account['id'])
+                ->where('status', 'approved')
+                ->orderBy('updated_at', 'DESC')
+                ->first();
+        });
     }
 }

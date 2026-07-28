@@ -112,7 +112,16 @@ class InboxController extends BaseController
         $replyWamids = array_values(array_unique(array_filter(array_column($messages, 'reply_to_message_id'))));
         $quotedByWamid = [];
         if ($replyWamids) {
-            foreach ($messageModel->whereIn('whatsapp_message_id', $replyWamids)->findAll() as $q) {
+            // account_id must be stated explicitly: this is the 2nd query on
+            // $messageModel, and BaseModel's scope only survives the first.
+            // reply_to_message_id is attacker-supplied (Api\SendController),
+            // so without this another tenant's message body would be shown
+            // as the quoted preview.
+            $quoted = $messageModel
+                ->whereIn('whatsapp_message_id', $replyWamids)
+                ->where('account_id', session('account_id'))
+                ->findAll();
+            foreach ($quoted as $q) {
                 $quotedByWamid[$q['whatsapp_message_id']] = $q;
             }
         }

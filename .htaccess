@@ -1,0 +1,57 @@
+# ====================================================================
+# ROVIX CRM — ROOT .htaccess for cPanel when docroot CANNOT be changed
+#
+# USE THIS ONLY IF the whole app sits in your public_html (so that
+# public_html/ contains app/, public/, system/, .env, etc.).
+#
+# HOW TO USE:
+#   1. Upload the whole app so its contents are inside public_html/.
+#   2. Rename this file to  .htaccess  in public_html/ (the app root).
+#   3. Leave public/.htaccess as-is (see note at bottom).
+#
+# If you CAN set the document root to .../rovix-crm/public, you do NOT
+# need this file at all — that is the cleaner, more secure setup.
+# ====================================================================
+
+Options -Indexes
+ServerSignature Off
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # ----------------------------------------------------------------
+    # 1. Block direct web access to application/framework internals.
+    #    These must never be reachable over HTTP.
+    # ----------------------------------------------------------------
+    RewriteRule ^(app|system|writable|tests|src|docker|vendor|node_modules)(/|$) - [F,L]
+    RewriteRule ^(\.env|env|composer\.(json|lock)|package(-lock)?\.json|Dockerfile|docker-compose\.yml|preload\.php|spark|phpunit\.dist\.xml) - [F,L]
+
+    # ----------------------------------------------------------------
+    # 2. Serve real static assets that live under public/ directly
+    #    (css, js, images, favicon, robots.txt, etc.).
+    # ----------------------------------------------------------------
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -f
+    RewriteRule ^(.*)$ public/$1 [L]
+
+    # ----------------------------------------------------------------
+    # 3. Everything else → CodeIgniter front controller in public/.
+    # ----------------------------------------------------------------
+    RewriteCond %{REQUEST_URI} !^/public/index\.php
+    RewriteRule ^(.*)$ public/index.php/$1 [L,QSA]
+
+    # ----------------------------------------------------------------
+    # 4. Preserve the Authorization header (needed for API/webhook auth).
+    # ----------------------------------------------------------------
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+
+# --------------------------------------------------------------------
+# NOTE about public/.htaccess:
+# The shipped public/.htaccess contains:  RewriteBase /rovix-crm/public/
+# That line is for local XAMPP only. For this root-funnel setup it is
+# bypassed (requests are routed straight to public/index.php above), so
+# you can leave it. If you INSTEAD set docroot to public/, edit that
+# line to:   RewriteBase /
+# --------------------------------------------------------------------

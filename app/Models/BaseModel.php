@@ -46,7 +46,9 @@ class BaseModel extends \CodeIgniter\Model
         }
     }
 
-    private function hasAccountId(): bool
+    // Must stay protected: PHP does not dispatch private methods
+    // polymorphically, so a private override in a child model is dead code.
+    protected function hasAccountId(): bool
     {
         // Tables without an account_id column (junction/child tables)
         $excludedTables = [
@@ -54,6 +56,7 @@ class BaseModel extends \CodeIgniter\Model
             'ci_sessions',
             'job_queue',
             'media_files',
+            'password_resets',
             'contact_tags',
             'contact_custom_values',
             'contact_notes',
@@ -65,7 +68,6 @@ class BaseModel extends \CodeIgniter\Model
             'flow_runs',
             'flow_run_events',
             'pipeline_stages',
-            'otp_verifications',
         ];
         return !in_array($this->table, $excludedTables);
     }
