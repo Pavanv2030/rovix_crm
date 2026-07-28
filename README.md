@@ -1,61 +1,96 @@
-# CodeIgniter 4 Framework
+# ROVIX CRM
 
-## What is CodeIgniter?
+A multi-tenant WhatsApp-first CRM. Each account manages its own contacts, conversations, sales pipeline, and marketing — all driven through the WhatsApp Business (Meta Cloud) API. Built on CodeIgniter 4 / PHP 8.2 / MySQL, designed to run on standard cPanel shared hosting (no Docker).
 
-CodeIgniter is a PHP full-stack web framework that is light, fast, flexible and secure.
-More information can be found at the [official site](https://codeigniter.com).
+## What it does
 
-This repository holds the distributable version of the framework.
-It has been built from the
-[development repository](https://github.com/codeigniter4/CodeIgniter4).
+- **Shared WhatsApp Inbox** — receive and reply to customer messages in real time (text, media, voice notes, reactions, quoted replies). Inbound messages arrive instantly via the Meta webhook; outbound sends go through a background queue.
+- **Contacts** — per-account contact book keyed by phone number, with custom fields, tags, notes, lead status, and CSV import.
+- **Deals & Pipelines** — drag-and-drop Kanban pipelines, stages, and deal tracking with values and won/lost status.
+- **Broadcasts** — send an approved WhatsApp template to many contacts in batches, with per-recipient status and unsubscribe handling.
+- **Flows** — a visual (Drawflow) builder for interactive WhatsApp conversations: buttons, lists, media, conditions, forms, catalog/product sends, handoff, AI nodes, and sub-flow triggers.
+- **Automations** — trigger-based rules (new message, keyword, tag added, time-based, etc.) that send messages/templates, tag contacts, create deals, call webhooks, and more.
+- **Appointments** — booking pages, appointment types, 24h reminders, post-appointment follow-ups, and Google Calendar sync.
+- **Catalog & Orders** — WhatsApp catalog/product messages and order capture.
+- **Templates** — create, submit, and manage Meta message templates (incl. media headers).
+- **AI assist** — optional AI (Claude/OpenAI) for reply suggestions and flow AI nodes, per-account keys.
+- **Team & roles** — invite members, role-based permissions (admin/agent), activity log, agent time logs.
+- **Reports & Dashboard** — sending history, lead/deal metrics, daily digest reports over WhatsApp.
 
-More information about the plans for version 4 can be found in [CodeIgniter 4](https://forum.codeigniter.com/forumdisplay.php?fid=28) on the forums.
+## Stack
 
-You can read the [user guide](https://codeigniter.com/user_guide/)
-corresponding to the latest version of the framework.
+- **CodeIgniter 4**, **PHP 8.2** (ext: intl, mbstring, mysqli, curl, gd, fileinfo, sodium)
+- **MySQL / MariaDB** (utf8mb4)
+- **Meta WhatsApp Cloud API** (Graph v21) for all messaging
+- File-based sessions; background jobs via a DB-backed queue + cron
 
-## Important Change with index.php
+## Architecture
 
-`index.php` is no longer in the root of the project! It has been moved inside the *public* folder,
-for better security and separation of components.
+Multi-tenant: every table is scoped by `account_id` (see `app/Models/BaseModel.php`). Inbound WhatsApp messages hit `POST /api/whatsapp/webhook`, are saved synchronously, then enqueue `run_automation` / `check_flow` jobs. All outbound sends (messages, templates, broadcasts, reports) run through the `job_queue` table, drained by the `queue:process` command. Time-based work (reminders, scheduled broadcasts, daily reports, cleanups) is orchestrated by `run:scheduled`.
 
-This means that you should configure your web server to "point" to your project's *public* folder, and
-not to the project root. A better practice would be to configure a virtual host to point there. A poor practice would be to point your web server to the project root and expect to enter *public/...*, as the rest of your logic and the
-framework are exposed.
+```
+app/
+  Controllers/         web + Api/ controllers
+  Libraries/           MetaApi, MessageSender, FlowEngine, AutomationEngine, WhatsApp/*
+  Models/              one per table, all extend BaseModel (account scoping)
+  Commands/            spark CLI: queue:process, run:scheduled, cleanups, reminders
+  Database/Migrations/ full schema (run with `php spark migrate`)
+  Config/              App, Database, WhatsApp, Rovix, Routes, Filters, ...
+public/                web root (index.php lives here)
+writable/              logs, cache, sessions, uploads
+```
 
-**Please** read the user guide for a better explanation of how CI4 works!
+## Installation (cPanel)
 
-## Repository Management
+Full step-by-step guide: **[DEPLOY-CPANEL.txt](DEPLOY-CPANEL.txt)**. In short:
 
-We use GitHub issues, in our main repository, to track **BUGS** and to track approved **DEVELOPMENT** work packages.
-We use our [forum](http://forum.codeigniter.com) to provide SUPPORT and to discuss
-FEATURE REQUESTS.
+1. Set the domain to **PHP 8.2** and enable the required extensions.
+2. Create a MySQL database + user.
+3. Upload the package; point the document root at `public/` (or use the fallback `.htaccess` layout).
+4. Copy the env template to `.env` and fill in every value (see below).
+5. Generate keys and build the schema:
+   ```bash
+   php spark key:generate      # writes encryption.key
+   php spark migrate           # creates all tables
+   ```
+   No SSH? Import the provided `.sql` schema via phpMyAdmin instead of `migrate`.
+6. Add the cron jobs (below).
+7. Run AutoSSL, then register the webhook in Meta.
 
-This repository is a "distribution" one, built by our release preparation script.
-Problems with it can be raised on our forum, or as issues in the main repository.
+### Configuration (`.env`)
 
-## Contributing
+Fill in at minimum:
 
-We welcome contributions from the community.
+| Key | Purpose |
+|-----|---------|
+| `app.baseURL` | Your https domain (trailing slash) |
+| `database.default.*` | DB host / name / user / password |
+| `encryption.key` | Framework key — `php spark key:generate` |
+| `rovix.encryptionKey` | 64 hex chars — encrypts stored WhatsApp tokens |
+| `whatsapp.metaAppSecret` | Meta app secret (verifies inbound webhooks) |
+| `whatsapp.verifyToken` | Any secret string; must match Meta's webhook config |
+| `META_APP_ID` | Your Meta App ID |
+| `email.fromEmail` | Sender address (password-reset emails) |
+| `session.savePath` | Absolute path to `writable/session` |
 
-Please read the [*Contributing to CodeIgniter*](https://github.com/codeigniter4/CodeIgniter4/blob/develop/CONTRIBUTING.md) section in the development repository.
+> `.env` is gitignored — never commit real secrets. Each account's own WhatsApp Phone Number ID / token are entered in-app (Settings → WhatsApp) and stored encrypted.
 
-## Server Requirements
+### Cron jobs (required)
 
-PHP version 8.2 or higher is required, with the following extensions installed:
+Both must run **every minute** — without them, no outbound messages, automations, flows, or reports run:
 
-- [intl](http://php.net/manual/en/intl.requirements.php)
-- [mbstring](http://php.net/manual/en/mbstring.installation.php)
+```
+* * * * * /usr/local/bin/php /home/<user>/rovix-crm/spark queue:process
+* * * * * /usr/local/bin/php /home/<user>/rovix-crm/spark run:scheduled
+```
 
-> [!WARNING]
-> - The end of life date for PHP 7.4 was November 28, 2022.
-> - The end of life date for PHP 8.0 was November 26, 2023.
-> - The end of life date for PHP 8.1 was December 31, 2025.
-> - If you are still using below PHP 8.2, you should upgrade immediately.
-> - The end of life date for PHP 8.2 will be December 31, 2026.
+Adjust the PHP binary and app path to your server. `run:scheduled` invokes the reminders and cleanups internally, so no other cron entries are needed.
 
-Additionally, make sure that the following extensions are enabled in your PHP:
+### Webhook (Meta)
 
-- json (enabled by default - don't turn it off)
-- [mysqlnd](http://php.net/manual/en/mysqlnd.install.php) if you plan to use MySQL
-- [libcurl](http://php.net/manual/en/curl.requirements.php) if you plan to use the HTTP\CURLRequest library
+- **Callback URL:** `https://<your-domain>/api/whatsapp/webhook`
+- **Verify token:** the same value as `whatsapp.verifyToken` in `.env`
+
+## License
+
+See [LICENSE](LICENSE). Built on [CodeIgniter 4](https://codeigniter.com).
